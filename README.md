@@ -6,11 +6,17 @@
 
 搭建Ucore操作系统
 
-### 课程镜像仓库(课程需要的基本环境已经配好了)
+### 课程资源
+
+课程网站:http://oslab.mobisys.cc/
+
+课程实验指导书:http://oslab.mobisys.cc/lab2025/_book/index.html
+
+#### 课程镜像仓库(课程需要的基本环境已经配好了)
 
 [![Docker Hub](https://img.shields.io/badge/DockerHub-lorn1%2Fpc-blue)](https://hub.docker.com/r/lorn1/pc)
 
-#### 使用方法
+##### 使用方法
 ```bash
 docker pull lorn1/pc:wsl
 docker run -it lorn1/pc:wsl /bin/bash
