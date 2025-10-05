@@ -14,7 +14,7 @@
 
 #### 课程镜像仓库(课程需要的基本环境已经配好了)
 
-[![Docker Hub](https://img.shields.io/badge/DockerHub-lorn1%2Fpc-blue)](https://hub.docker.com/r/lorn1/pc)
+[![Docker Hub](https://img.shields.io/badge/DockerHub-lorn1%2Fpc-blue)](https://hub.docker.com/repository/docker/lorn1/os-wsl/general)
 
 ##### 使用方法
 ```bash
