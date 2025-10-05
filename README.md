@@ -14,12 +14,12 @@
 
 #### 课程镜像仓库(课程需要的基本环境已经配好了)
 
-[![Docker Hub](https://img.shields.io/badge/DockerHub-lorn1%2Fpc-blue)](https://hub.docker.com/repository/docker/lorn1/os-wsl/general)
+[![Docker Hub](https://img.shields.io/badge/DockerHub-lorn1%2Fos-blue)](https://hub.docker.com/repository/docker/lorn1/os-wsl/general)
 
 ##### 使用方法
 ```bash
-docker pull lorn1/pc:wsl
-docker run -it lorn1/pc:wsl /bin/bash
+docker pull lorn1/os-wsl:latest
+docker run -it lorn1/os-wsl:latest /bin/bash
 ```
 
 ### lab-01：比麻雀更小的麻雀（最小可执行内核）
