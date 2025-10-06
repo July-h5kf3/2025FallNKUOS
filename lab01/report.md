@@ -127,6 +127,88 @@
 
 ### 任务二(刘part)
 
+首先我们先测试`make qemu`语句,运行得到如下结果
+<img src="fig/make_qemu.png" width = "300">
+说明我们环境配置无误，可以开始我们的调试工作
+
+依据实验指导书的内容，我们开启两个终端，一个执行make debug,另一个执行make gdb.
+<img src="fig/make_gdb.png" width="300">
+
+随后我们开始跟踪QEMU模拟的RISC-V从加电开始，直到执行内核第一条指令的整个过程。在上图中我们可以看到'0x0000000000001000 in ?? ()'说明程序此时暂停在`0x1000`处。这是CPU的复位向量地址，处理器将从此处开始执行复位代码。
+
+接下来我们使用指令`x/10i $pc`显示即将执行的10条指令，得到
+
+```
+(gdb) x/10i $pc
+=> 0x1000:      auipc   t0,0x0     #t0 = pc + 0=0x1000
+   0x1004:      addi    a1,t0,32   #a1 = t0 + 32 = 0x1020
+   0x1008:      csrr    a0,mhartid #a0 = mhartid = 0
+   0x100c:      ld      t0,24(t0)  #t0 = [t0 + 24]
+   0x1010:      jr      t0         #跳转到t0的位置
+   0x1014:      unimp
+   0x1016:      unimp
+   0x1018:      unimp
+   0x101a:      .insn   2, 0x8000
+   0x101c:      unimp
+```
+我们使用指令`x/1xw 0x1018`,查看地址`0x1018`中的数据,得到`0x1018: 0x80000000`,可以知道在指令`0x1010`后，CPU跳转到地址`0x80000000`.而我们知道，QEMU在开始执行任何指令之前，首先要将bootloader的OpenSBI.bin加载到物理内存地址0x80000000开头的区域上，因此在跳转指令执行后，CPU将开始执行OpenSBI.bin程序.
+
+跳转执行完毕后显示`0x0000000080000000 in ?? ()`,此时我们再执行指令`x/10i $pc`,得到
+```
+0x80000000:  csrr    a6,mhartid
+   0x80000004:  bgtz    a6,0x80000108
+   0x80000008:  auipc   t0,0x0
+   0x8000000c:  addi    t0,t0,1032
+   0x80000010:  auipc   t1,0x0
+   0x80000014:  addi    t1,t1,-16
+   0x80000018:  sd      t1,0(t0)
+   0x8000001c:  auipc   t0,0x0
+   0x80000020:  addi    t0,t0,1020
+   0x80000024:  ld      t0,0(t0)
+```
+该处的指令主要是为了加载操作系统内核并启动操作系统的执行.
+
+接下来我们在`0x80200000`处通过指令`b *0x80200000`设置断点.然后输入c，执行到断点处。
+<img src="fig/make_0x8020.png" width="300">
+可以看到此时内核已经启动
+
+输入指令`x/10i $pc`，得到
+```
+ 0x80200000 <kern_entry>:     auipc   sp,0x3
+   0x80200004 <kern_entry+4>:   mv      sp,sp
+   0x80200008 <kern_entry+8>:
+    j   0x8020000a <kern_init>
+   0x8020000a <kern_init>:      auipc   a0,0x3
+   0x8020000e <kern_init+4>:    addi    a0,a0,-2
+   0x80200012 <kern_init+8>:    auipc   a2,0x3
+   0x80200016 <kern_init+12>:   addi    a2,a2,-10
+   0x8020001a <kern_init+16>:   addi    sp,sp,-16
+   0x8020001c <kern_init+18>:   li      a1,0
+   0x8020001e <kern_init+20>:   sub     a2,a2,a0
+```
+发现与内核中的`kernel_entry`代码块的内容一致，说明`0x80200000`的确是内核的起始位置。
+
+<div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
+<b>问题一:</b> RISC-V 硬件加电后最初执行的几条指令位于什么地址？
+</div>
+RISC-V硬件加电后，将要执行的指令在复位地址`0x1000`到跳转指令`0x1010`处。
+<b>问题二:</b> 它们主要完成了哪些功能？
+</div>
+具体的指令如下:
+```
+   0x1000:      auipc   t0,0x0     #t0 = pc + 0=0x1000
+   0x1004:      addi    a1,t0,32   #a1 = t0 + 32 = 0x1020
+   0x1008:      csrr    a0,mhartid #a0 = mhartid = 0
+   0x100c:      ld      t0,24(t0)  #t0 = [t0 + 24]
+   0x1010:      jr      t0         #跳转到t0的位置
+```
+具体而言
+- `auipc   t0,0x0`将`t0`寄存器的值设置为0x1000
+- `addi    a1,t0,32` `a1`寄存器的值设置为0x1020
+- `csrr    a0,mhartid` 将`a0`寄存器设置为当前CPU核心ID
+- `ld      t0,24(t0)` 从`t0+24`位置加载内存地址
+- `jr      t0`跳转到`t0`地址，将控制权转移给下一个启动阶段(OpenSBI.bin)
+
 
 
 
