@@ -196,9 +196,13 @@
 <div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
 <b>问题一:</b> RISC-V 硬件加电后最初执行的几条指令位于什么地址？
 </div>
+
 RISC-V硬件加电后，将要执行的指令在复位地址`0x1000`到跳转指令`0x1010`处。
+
+<div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
 <b>问题二:</b> 它们主要完成了哪些功能？
 </div>
+
 具体的指令如下:
 ```
    0x1000:      auipc   t0,0x0     #t0 = pc + 0=0x1000
