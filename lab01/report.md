@@ -1,6 +1,7 @@
 <center>
     <h1>OS-lab01实验报告</h1>
 </center>
+
 #### 一. 实验要求
 
 1.阅读kern/init/entry.S内容代码，结合操作系统内核启动流程，回答下列问题：
