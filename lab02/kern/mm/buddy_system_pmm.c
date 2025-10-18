@@ -2,21 +2,6 @@
 #include <list.h>
 #include <string.h>
 #include <stdio.h>
-#include <vector>
-
-
-// 全局 Buddy System 管理结构
-static struct {
-    list_entry_t free_list;  // 空闲块链表
-    size_t nr_free;          // 总空闲页面数
-    struct Buddy2 buddy_storage;  // Buddy System 实例（直接存储，不使用指针）
-} buddy_area;
-
-#define free_list (buddy_area.free_list)
-#define nr_free (buddy_area.nr_free)
-#define buddy (buddy_area.buddy_storage)
-#define MAX_BUDDY_ORDER 10  // 最大块阶数，例如 2^10 = 1024 页
-
 
 static int is_order_of_two(size_t n) 
 {
@@ -32,13 +17,13 @@ static size_t fix_size(size_t n)
 
 struct Buddy2
 {
-    size_t size;
-    //size是内存的总页面数，也是buddy2二叉树根节点的longest数值
+    size_t size;//size是内存的总页面数，也是buddy2二叉树根节点的longest数值
     struct Page* base;
     //我们需要记录内存中第一个页面的地址，base+offset就可以获取目标页面
 
+    //考虑到无法使用malloc动态分配longest数组，我们将其直接存放在伙伴系统管理的内存中
+    //所以我们只需要记录longest数组的大小即可
     size_t longest_size;
-    // 注意：不再使用指针，而是直接在伙伴系统管理的内存中预留空间
 };
 
 static void buddy2_init(struct Buddy2* buddy, size_t n, struct Page* base)
@@ -181,6 +166,20 @@ static void buddy2_show_array(struct Buddy2* buddy, int start, int max_order) {
         cprintf("longest[%d] = %d\n", i, longest[i]);
     }
 }
+
+
+static struct {
+    list_entry_t free_list; 
+    //空闲双向链表，free_list和空闲内存块的头页面通过page_link字段连接起来
+    size_t nr_free; 
+    struct Buddy2 buddy_storage;  
+} buddy_area;
+
+#define free_list (buddy_area.free_list)
+#define nr_free (buddy_area.nr_free)
+#define buddy (buddy_area.buddy_storage)
+#define MAX_BUDDY_ORDER 10  // 最大块阶数，例如 2^10 = 1024 页
+
 
 // pmm_manager 接口函数
 static void buddy_init(void) 
