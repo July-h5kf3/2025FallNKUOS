@@ -2,20 +2,6 @@
 #include <list.h>
 #include <string.h>
 #include <stdio.h>
-#include <vector>
-
-
-// 全局 Buddy System 管理结构
-static struct {
-    list_entry_t free_list;  // 空闲块链表
-    size_t nr_free;          // 总空闲页面数
-    struct Buddy2* buddy;    // Buddy System 实例
-} buddy_area;
-
-#define free_list (buddy_area.free_list)
-#define nr_free (buddy_area.nr_free)
-#define MAX_BUDDY_ORDER 10  // 最大块阶数，例如 2^10 = 1024 页
-
 
 static int is_order_of_two(size_t n) 
 {
@@ -53,7 +39,8 @@ static void buddy2_init(struct Buddy2* buddy, size_t n, struct Page* base)
     buddy->size = n;
     buddy->base = base;
     buddy->longest_size = 2 * n - 1;
-    buddy->longest = (int*)malloc(buddy->longest_size * sizeof(int));
+    //因为不能使用malloc等函数，那么让longest数组紧跟在Buddy2结构体后面分配内存
+    buddy->longest = (int*)(buddy + 1);
 
     int node_size = 2 * n;
     for (size_t i = 0; i < buddy->longest_size; i++) 
@@ -135,7 +122,7 @@ static void buddy2_free(struct Buddy2* buddy, int offset)
         int ll = buddy->longest[2 * index + 1];
         int rl = buddy->longest[2 * index + 2];
 
-        //加入左右儿子数值之和与父节点理论值
+        //加入左右儿子数值之和与父节点理论值一致，那么恢复父节点的longest值
         if (ll + rl == node_size) {
             buddy->longest[index] = node_size;
         } else {
@@ -144,31 +131,39 @@ static void buddy2_free(struct Buddy2* buddy, int offset)
     }
 }
 
-static void buddy2_destroy(struct Buddy2* buddy) {
-    if (buddy->longest) free(buddy->longest);
-    buddy->size = 0;
-    buddy->base = NULL;
-    buddy->longest = NULL;
-}
 
-static void buddy2_show_array(struct Buddy2* buddy, int start, int max_order) {
-    cprintf("Buddy array (longest) from index %d:\n", start);
-    for (int i = start; i < (int)buddy->longest_size && i < (1 << (max_order + 1)) - 1; i++) {
-        cprintf("longest[%d] = %d\n", i, buddy->longest[i]);
-    }
-}
+static struct 
+{
+    list_entry_t free_list; 
+    size_t nr_free; 
+    struct Buddy2* buddy;
+} buddy_area;
+
+#define free_list (buddy_area.free_list)
+#define nr_free (buddy_area.nr_free)
+#define MAX_BUDDY_ORDER 10  // 最大块阶数，例如 2^10 = 1024 页
 
 // pmm_manager 接口函数
-static void buddy_init(void) {
+static void buddy_init(void) 
+{
     list_init(&free_list);
     nr_free = 0;
     buddy_area.buddy = NULL;
 }
 
-static void buddy_init_memmap(struct Page *base, size_t n) {
+static void buddy_init_memmap(struct Page *base, size_t n) 
+{
+    //初始化内存块，块大小为n个页面，块中第一个页的地址为 base
     assert(n > 0);
     if (!is_order_of_two(n)) n = fix_size(n);
-    for (struct Page *p = base; p != base + n; p++) {
+
+    size_t longest_size = 2 * n - 1;
+    size_t bytes_needed = sizeof(struct Buddy2) + longest_size * sizeof(int);
+    size_t meta_pages = (bytes_needed + PGSIZE - 1) / PGSIZE;
+
+
+    for (struct Page *p = base; p != base + n; p++) 
+    {
         assert(PageReserved(p));
         p->flags = p->property = 0;
         set_page_ref(p, 0);
