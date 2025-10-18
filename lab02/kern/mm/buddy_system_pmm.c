@@ -155,7 +155,7 @@ static void buddy2_free(struct Buddy2* buddy, int offset)
         int ll = longest[2 * index + 1];
         int rl = longest[2 * index + 2];
 
-        //加入左右儿子数值之和与父节点理论值
+        //加入左右儿子数值之和与父节点理论值一致，那么恢复父节点的longest值
         if (ll + rl == node_size) {
             longest[index] = node_size;
         } else {
@@ -183,16 +183,26 @@ static void buddy2_show_array(struct Buddy2* buddy, int start, int max_order) {
 }
 
 // pmm_manager 接口函数
-static void buddy_init(void) {
+static void buddy_init(void) 
+{
     list_init(&free_list);
     nr_free = 0;
     // buddy结构体不需要初始化指针，直接使用buddy_area.buddy_storage
 }
 
-static void buddy_init_memmap(struct Page *base, size_t n) {
+static void buddy_init_memmap(struct Page *base, size_t n) 
+{
+    //初始化内存块，块大小为n个页面，块中第一个页的地址为 base
     assert(n > 0);
     if (!is_order_of_two(n)) n = fix_size(n);
-    for (struct Page *p = base; p != base + n; p++) {
+
+    size_t longest_size = 2 * n - 1;
+    size_t bytes_needed = sizeof(struct Buddy2) + longest_size * sizeof(int);
+    size_t meta_pages = (bytes_needed + PGSIZE - 1) / PGSIZE;
+
+
+    for (struct Page *p = base; p != base + n; p++) 
+    {
         assert(PageReserved(p));
         p->flags = p->property = 0;
         set_page_ref(p, 0);
