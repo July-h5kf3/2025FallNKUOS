@@ -65,9 +65,42 @@ struct Buddy2
         //什么是合适的index呢？longest[index]=s时，这个内存单元恰好合适
         for(node_size = self->size;node_size=!s;node_size/=2)
         {
-
+            if(self->longest[2*index+1]>=s)
+            {
+                //假设当前节点的左儿子所代表的内存空间满足s的要求
+                //那么向左子树遍历
+                index = 2 * index + 1;
+            }
+            else
+            {
+                //反正，如果左儿子的空间不能满足s
+                //那么说明左儿子这部分的内存空间被占用了部分，无法满足s所需内存
+                index = 2 * index + 2;
+            }
         }
 
-  
+        //注意：这个循环的正确运行，建立在longest根据内存情况实时更新的前提下
+        //假设s=512，此时longest[0]=512;longest[1]=0;longest[2]=512;
+        //那么最终获取的Index为2
+        
+        self->longest[index] = 0;
+        
+        //offset的计算是这样的流程：
+        //offset = node_size * pos，其中node_size = s，pos指当前index在该层的第几个
+        //level = log_2{size / node_size} 
+        //first_index = 2 ^ level - 1
+        //pos = index - first_index
+        //offset = node_size * (index - 2 ^ level + 1) = (index + 1) * node_size - size
+        offset = (index + 1) * node_size - self->size;
+
+        //和之前说的一样，一旦进行内存分配，就需要实时的更新longest[]
+        //按照当前index，不断向上遍历，其父节点的值为左右儿子中的最大值
+        while(index)
+        {
+            index = ( index - 1 ) / 2;
+            self->longest[index] = Max(self->longest[2*index+1],self->longest[2*index+2]);
+        } 
+
+        return offset;
     }
 }
