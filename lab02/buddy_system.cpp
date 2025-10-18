@@ -8,6 +8,17 @@ bool is_order_of_two(int n)
     return n>0 && n&(n-1)==0;
 }
 
+int fix_size(int n)
+{
+    int res = 1;
+    while(res < n)
+    {
+        res = res * 2;
+    }
+
+    return res;
+}
+
 struct Buddy2
 {
     int size;
@@ -102,5 +113,49 @@ struct Buddy2
         } 
 
         return offset;
+    }
+
+    void Buddy2_free(int offset)
+    {
+        assert(self ==nullptr || offset < 0 || offset >= size);
+
+        int node_size = 1;
+        int index = self->size - 1 + offset;
+        //我们先假设释放的内存为最小内存块，所代表的可分配内存空间为1个单元
+        //size-1为所有叶子节点的开头，比如size=8时，第一个叶子节点的index=7
+        //加上offset后，就确定了我们要释放的是哪个最小内存单元
+
+        //循环的终止条件为self->longest[index]=0，也就是找到了第一个标记为‘完全被占用’的节点
+        for(;self->longest[index];index = (index-1)/2 )
+        {
+            //由于内存分配时，我们只将目标index和其父节点的longest值进行了更新
+            node_size *= 2;
+            if(index == 0)
+            {
+                return;
+            }
+        }
+
+        self->longest[index] = node_size; //恢复这个节点的longest值，相当于回退到这部分内存未被释放的状态
+        
+        int ll,rl;
+        while(index)
+        {
+            index = (index - 1) / 2;
+            node_size *= 2;
+
+            ll = self->longest[2*index+1];
+            rl = self->longest[2*index+2];
+
+            if(ll + rl == node_size)
+            {
+                //倘若父节点的左右子树的longest值相加，和未分配的情况一致，那么就可以进行合并
+                self->longest[index] = node_size;
+            }
+            else
+            {
+                self->longest[index] =  Max(ll,rl);
+            }
+        }    
     }
 }
