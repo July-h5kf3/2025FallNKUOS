@@ -9,11 +9,12 @@
 static struct {
     list_entry_t free_list;  // 空闲块链表
     size_t nr_free;          // 总空闲页面数
-    struct Buddy2* buddy;    // Buddy System 实例
+    struct Buddy2 buddy_storage;  // Buddy System 实例（直接存储，不使用指针）
 } buddy_area;
 
 #define free_list (buddy_area.free_list)
 #define nr_free (buddy_area.nr_free)
+#define buddy (buddy_area.buddy_storage)
 #define MAX_BUDDY_ORDER 10  // 最大块阶数，例如 2^10 = 1024 页
 
 
@@ -29,21 +30,21 @@ static size_t fix_size(size_t n)
     return res;
 }
 
-struct Buddy2 
+struct Buddy2
 {
-    size_t size; 
-    //size是内存的总页面数，也是buddy2二叉树根节点的longest数值       
-    struct Page* base;  
+    size_t size;
+    //size是内存的总页面数，也是buddy2二叉树根节点的longest数值
+    struct Page* base;
     //我们需要记录内存中第一个页面的地址，base+offset就可以获取目标页面
 
-    int* longest;        
-    size_t longest_size; 
+    size_t longest_size;
+    // 注意：不再使用指针，而是直接在伙伴系统管理的内存中预留空间
 };
 
-static void buddy2_init(struct Buddy2* buddy, size_t n, struct Page* base) 
+static void buddy2_init(struct Buddy2* buddy, size_t n, struct Page* base)
 {
     //初始化函数，设计一颗完全二叉树，将内存空间分为n个页，页的数目为2的幂次
-    if (n < 1 || !is_order_of_two(n)) 
+    if (n < 1 || !is_order_of_two(n))
     {
         //如果页的数目不为2的幂次，那么就无法后续进行折半生成完全二叉树，返回错误
         cprintf("Error: size must be a power of two.\n");
@@ -53,66 +54,85 @@ static void buddy2_init(struct Buddy2* buddy, size_t n, struct Page* base)
     buddy->size = n;
     buddy->base = base;
     buddy->longest_size = 2 * n - 1;
-    buddy->longest = (int*)malloc(buddy->longest_size * sizeof(int));
+
+    // 直接使用伙伴系统管理的内存开头作为longest数组，无需malloc
+    // 注意：这里假设longest数组存放在伙伴系统管理的内存开始处
+    // 我们需要为longest数组预留空间，所以实际可用的内存会减少
+    int* longest = (int*)base;  // 直接使用页结构的内存作为longest数组
 
     int node_size = 2 * n;
-    for (size_t i = 0; i < buddy->longest_size; i++) 
+    for (size_t i = 0; i < buddy->longest_size; i++)
     {
         if (is_order_of_two(i + 1)) node_size /= 2;
         //假设i+1为2的幂次，那么说明进入了二叉树新的一层，那么其对应的内存单元数目折半
-        buddy->longest[i] = node_size;
+        longest[i] = node_size;
     }
+
+    // 重要：调整base指针，跳过longest数组占用的空间
+    // longest数组占用了 (2*n-1) * sizeof(int) 字节
+    size_t metadata_size = buddy->longest_size * sizeof(int);
+    size_t pages_for_metadata = (metadata_size + sizeof(struct Page) - 1) / sizeof(struct Page);
+    buddy->base = base + pages_for_metadata;
+    buddy->size = n - pages_for_metadata;  // 实际可用页面数减少
 }
 
-static int buddy2_alloc(struct Buddy2* buddy, size_t n) 
+static int buddy2_alloc(struct Buddy2* buddy, size_t n)
 {
     //如果要分配n个内存单元，使用fix_size函数，将其调整为适合的内存块大小
     if (n <= 0) n = 1;
     else if (!is_order_of_two(n)) n = fix_size(n);
 
-    if (buddy->longest[0] < (int)n) return -1;
+    // 直接访问伙伴系统内存开头的longest数组
+    int* longest = (int*)buddy->base;
+    size_t original_base_offset = (buddy->base - (struct Page*)longest) / sizeof(struct Page);
+
+    if (longest[0] < (int)n) return -1;
     //倘若目前内存总空间都无法满足n，那么自然无法进行分配
 
     size_t index = 0;
     int node_size;
 
     //循环的目的在于找到合适的index，终止条件为node_size=n，也就是longest[index]=node_size=n时
-    for (node_size = buddy->size; node_size != (int)n; node_size /= 2) 
+    for (node_size = buddy->size; node_size != (int)n; node_size /= 2)
     {
-        if (buddy->longest[2 * index + 1] >= (int)n) 
+        if (longest[2 * index + 1] >= (int)n)
         {
             //假设当前节点的左儿子可以满足n，那么进入左子树继续遍历
             index = 2 * index + 1;
-        } 
-        else 
+        }
+        else
         {
             index = 2 * index + 2;
         }
     }
     //找到合适的index后，将其内存块页面值变为0(这一内存块的首页面property为0)
-    buddy->longest[index] = 0;
+    longest[index] = 0;
 
     int offset = (index + 1) * node_size - buddy->size;
     //offset的计算是这样的流程：
         //offset = node_size * pos，其中node_size = s，pos指当前index在该层的第几个
-        //level = log_2{size / node_size} 
+        //level = log_2{size / node_size}
         //first_index = 2 ^ level - 1
         //pos = index - first_index
         //offset = node_size * (index - 2 ^ level + 1) = (index + 1) * node_size - size
 
-    while (index) 
+    while (index)
     {
         index = (index - 1) / 2;
-        buddy->longest[index] = buddy->longest[2 * index + 1] > buddy->longest[2 * index + 2] ?
-                                buddy->longest[2 * index + 1] : buddy->longest[2 * index + 2];
+        longest[index] = longest[2 * index + 1] > longest[2 * index + 2] ?
+                                longest[2 * index + 1] : longest[2 * index + 2];
         //逐级向上遍历，修改父节点的longest值，取两儿子节点中数值较大的
     }
     return offset;
 }
 
-static void buddy2_free(struct Buddy2* buddy, int offset) 
+static void buddy2_free(struct Buddy2* buddy, int offset)
 {
     if (offset < 0 || offset >= (int)buddy->size) return;
+
+    // 直接访问伙伴系统内存开头的longest数组
+    int* longest = (int*)buddy->base;
+    size_t original_base_offset = (buddy->base - (struct Page*)longest) / sizeof(struct Page);
 
     int node_size = 1;
     size_t index = buddy->size - 1 + offset;
@@ -120,41 +140,45 @@ static void buddy2_free(struct Buddy2* buddy, int offset)
     //size-1为所有叶子节点的开头，比如size=8时，第一个叶子节点的index=7
     //加上offset后，就确定了我们要释放的是哪个最小内存单元
 
-    //找到第一个标记为‘完全被占用’的节点，获取其Index和该节点理论的内存块大小
-    for (; buddy->longest[index]; index = (index - 1) / 2) 
+    //找到第一个标记为'完全被占用'的节点，获取其Index和该节点理论的内存块大小
+    for (; longest[index]; index = (index - 1) / 2)
     {
         node_size *= 2;
         if (index == 0) return;
     }
 
-    buddy->longest[index] = node_size;
-    while (index) 
+    longest[index] = node_size;
+    while (index)
     {
         index = (index - 1) / 2;
         node_size *= 2;
-        int ll = buddy->longest[2 * index + 1];
-        int rl = buddy->longest[2 * index + 2];
+        int ll = longest[2 * index + 1];
+        int rl = longest[2 * index + 2];
 
         //加入左右儿子数值之和与父节点理论值
         if (ll + rl == node_size) {
-            buddy->longest[index] = node_size;
+            longest[index] = node_size;
         } else {
-            buddy->longest[index] = ll > rl ? ll : rl;
+            longest[index] = ll > rl ? ll : rl;
         }
     }
 }
 
 static void buddy2_destroy(struct Buddy2* buddy) {
-    if (buddy->longest) free(buddy->longest);
+    // 不再需要free，因为longest数组就在伙伴系统管理的内存中
     buddy->size = 0;
     buddy->base = NULL;
-    buddy->longest = NULL;
+    buddy->longest_size = 0;
 }
 
 static void buddy2_show_array(struct Buddy2* buddy, int start, int max_order) {
+    // 直接访问伙伴系统内存开头的longest数组
+    int* longest = (int*)buddy->base;
+    size_t original_base_offset = (buddy->base - (struct Page*)longest) / sizeof(struct Page);
+
     cprintf("Buddy array (longest) from index %d:\n", start);
     for (int i = start; i < (int)buddy->longest_size && i < (1 << (max_order + 1)) - 1; i++) {
-        cprintf("longest[%d] = %d\n", i, buddy->longest[i]);
+        cprintf("longest[%d] = %d\n", i, longest[i]);
     }
 }
 
@@ -162,7 +186,7 @@ static void buddy2_show_array(struct Buddy2* buddy, int start, int max_order) {
 static void buddy_init(void) {
     list_init(&free_list);
     nr_free = 0;
-    buddy_area.buddy = NULL;
+    // buddy结构体不需要初始化指针，直接使用buddy_area.buddy_storage
 }
 
 static void buddy_init_memmap(struct Page *base, size_t n) {
@@ -173,8 +197,8 @@ static void buddy_init_memmap(struct Page *base, size_t n) {
         p->flags = p->property = 0;
         set_page_ref(p, 0);
     }
-    base->property = n;
-    SetPageProperty(base);
+    // 注意：不再设置property标志，因为伙伴系统自己管理内存状态
+    // 伙伴系统不需要依赖页面本身的property标志来跟踪分配状态
     nr_free += n;
     if (list_empty(&free_list)) {
         list_add(&free_list, &(base->page_link));
@@ -190,25 +214,20 @@ static void buddy_init_memmap(struct Page *base, size_t n) {
             }
         }
     }
-    if (buddy_area.buddy) {
-        buddy2_destroy(buddy_area.buddy);
-        free(buddy_area.buddy);
+    if (buddy.size > 0) {
+        buddy2_destroy(&buddy);
     }
-    buddy_area.buddy = (struct Buddy2*)malloc(sizeof(struct Buddy2));
-    if (buddy_area.buddy) {
-        buddy2_init(buddy_area.buddy, n, base);
-    } else {
-        cprintf("Error: failed to allocate Buddy2 struct.\n");
-    }
+    // 直接使用全局buddy_area中的buddy结构体，无需malloc
+    buddy2_init(&buddy, n, base);
 }
 
 static struct Page *buddy_alloc_pages(size_t n) {
     assert(n > 0);
     if (n > nr_free) return NULL;
     size_t alloc_size = fix_size(n);
-    int offset = buddy2_alloc(buddy_area.buddy, alloc_size);
+    int offset = buddy2_alloc(&buddy, alloc_size);
     if (offset < 0) return NULL;
-    struct Page *page = buddy_area.buddy->base + offset;
+    struct Page *page = buddy.base + offset;
     list_entry_t *le = &free_list;
     while ((le = list_next(le)) != &free_list) {
         struct Page *p = le2page(le, page_link);
@@ -245,8 +264,8 @@ static void buddy_free_pages(struct Page *base, size_t n) {
         set_page_ref(p, 0);
     }
     size_t alloc_size = fix_size(n);
-    int offset = base - buddy_area.buddy->base;
-    buddy2_free(buddy_area.buddy, offset);
+    int offset = base - buddy.base;
+    buddy2_free(&buddy, offset);
     base->property = alloc_size;
     SetPageProperty(base);
     nr_free += n;
@@ -290,8 +309,8 @@ static size_t buddy_nr_free_pages(void) {
 }
 
 static void show_buddy_array(int start, int max_order) {
-    if (buddy_area.buddy) {
-        buddy2_show_array(buddy_area.buddy, start, max_order);
+    if (buddy.size > 0) {
+        buddy2_show_array(&buddy, start, max_order);
     }
 }
 
