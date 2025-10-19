@@ -9,7 +9,7 @@
 具体而言，该函数是first_fit算法的初始化阶段，为内存分配器建立了一个有序的空闲内存块链表。给定输入空闲块的起始页面指针Base以及空闲内存块的页面数量n，则该函数会将以Base开始的连续n个Page进行清空初始化，然后被串入空闲内存块链表free_list(双向循环链表，链表中的空闲块依据其起始位置地址大小从小到大排序)。
 
 串入链表的逻辑如下:
-```
+```c
 if (list_empty(&free_list)) {
         list_add(&free_list, &(base->page_link));
     } else {
@@ -58,7 +58,7 @@ if (list_empty(&free_list)) {
 `Best_fit`为了解决这一问题，在分配内存时我们不选择第一个足够大的空闲块，而是选择最接近的满足要求的内存块。
 
 具体来说，我们对`first_fit`的代码进行更改
-```
+```c
 while ((le = list_next(le)) != &free_list) {
         struct Page *p = le2page(le, page_link);
         if (p->property >= n) {
@@ -74,7 +74,7 @@ while ((le = list_next(le)) != &free_list) {
 为了测试我们更改的正确性，我们将`pmm.c`中的`pmm_manager`更改为`best_fit_pmm_manager`然后进行执行`make grade`进行测试。
 
 得到如下结果:
-```
+```bash
 root@DESKTOP-6N21GHG:~/操作系统/lab02# make grade
 >>>>>>>>>> here_make>>>>>>>>>>>
 gmake[1]: Entering directory '/root/操作系统/lab02' + cc kern/init/entry.S + cc kern/init/init.c + cc kern/libs/stdio.c + cc kern/debug/panic.c + cc kern/driver/console.c + cc kern/driver/dtb.c + cc kern/mm/best_fit_pmm.c + cc kern/mm/default_pmm.c + cc kern/mm/pmm.c + cc libs/printfmt.c + cc libs/readline.c + cc libs/sbi.c + cc libs/string.c + ld bin/kernel riscv64-unknown-elf-objcopy bin/kernel --strip-all -O binary bin/ucore.img gmake[1]: Leaving directory '/root/操作系统/lab02'
