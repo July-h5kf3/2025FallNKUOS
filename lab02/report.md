@@ -1,36 +1,7 @@
 <center>
 <h1>OS-lab02实验报告</h1>
 </center>
-
-## 一、实验要求
-
-1.理解first-fit 连续物理内存分配算法
-
-阅读实验手册的教程并结合`kern/mm/default_pmm.c`中的相关代码，认真分析default_init_memmap，default_init，default_alloc_pages， default_free_pages等相关函数，并描述程序在进行物理内存分配的过程以及各个函数的作用。
-
-回答：你的first fit算法是否有进一步的改进空间？
-
-2.实现 Best-Fit 连续物理内存分配算法（需要编程）
-
-参考kern/mm/default_pmm.c对First Fit算法的实现，**编程实现Best Fit页面分配算法**，算法的时空复杂度不做要求，能通过测试即可。 
-
-回答：你的 Best-Fit 算法是否有进一步的改进空间？
-
-3.扩展练习Challenge：buddy system（伙伴系统）分配算法（需要编程）
-
-在ucore中**实现buddy system分配算法**，要求有比较充分的测试用例说明实现的正确性，需要有设计文档。
-
-4.扩展练习Challenge：任意大小的内存单元slub分配算法（需要编程）
-
-在ucore中**实现slub分配算法**。要求有比较充分的测试用例说明实现的正确性，需要有设计文档。
-
-5.扩展练习Challenge：硬件的可用物理内存范围的获取方法（思考题）
-
-如果 OS 无法提前知道当前硬件的可用物理内存范围，请问你有何办法让 OS 获取可用物理内存范围？
-
-## 二、实验内容(part 1 + part2)
-
-练习一：
+## 练习1：理解first-fit 连续物理内存分配算法(思考题)
 
 - 函数`default_init_memmap`主要用于初始化一段连续的内存区域，将其转化为一个空闲的内存块。
 
@@ -79,9 +50,9 @@ if (list_empty(&free_list)) {
 
 - 可以加入缓存机制
 
-练习二:
+## 练习2：实现 Best-Fit 连续物理内存分配算法(需要编程)
 
-要求实现`Best_fit`的内存分配算法，简单来说在`first_fit`中我们的策略是找到空闲链表`free_list`中第一个足够大的空闲块，但是这种方法一方面会产生大量的内存碎片，出现总内存足够但无法继续分配的问题，内存利用效率地下；另一方面`first_fit`往往倾向于选择较低地址的内存块，高地址的内存被忽略。
+​        要求实现`Best_fit`的内存分配算法，简单来说在`first_fit`中我们的策略是找到空闲链表`free_list`中第一个足够大的空闲块，但是这种方法一方面会产生大量的内存碎片，出现总内存足够但无法继续分配的问题，内存利用效率地下；另一方面`first_fit`往往倾向于选择较低地址的内存块，高地址的内存被忽略。
 
 `Best_fit`为了解决这一问题，在分配内存时我们不选择第一个足够大的空闲块，而是选择最接近的满足要求的内存块。
 
@@ -123,7 +94,9 @@ Total Score: 25/25
 
 此外buddy system算法以及slub分配算法可以进一步提高算法的性能以及内存利用率，我们将在challenge部分进行实现与测试。
 
-#### 实验内容(challenge1)
+## Challenge1：buddy system(伙伴系统)分配算法(需要编程)
+
+### 1. 原理概述
 
 我们参考[伙伴分配器的一个极简实现 | 酷 壳 - CoolShell](https://coolshell.cn/articles/10427.html)这个文档，在操作系统中尝试实现了buddy system算法来对内存进行管理。
 
@@ -140,6 +113,10 @@ Total Score: 25/25
 3. get_order：获取某个数关于2的阶数，相当于$log_2(n)$
 4. power_of_two：计算2的幂次，相当于$2^n$
 5. buddy_insert_block：向free_list中的某个链表按地址顺序从低到高插入内存块
+
+### 2. 具体实现过程
+
+#### 2.1 结构体创建
 
 首先是伙伴分配器的数据结构设计。我们通过一个链表数组`free_list[]`管理内存，free_list[i]管理着所有页面数量为$2^i$的空闲内存块，通过Page结构体中的page_link进行链表连接，由于内存空间按照4kb一页划分，最多划分为32768 页，即$2^{15}$，那么构建一个大小为16的数组就可以满足需求；`total_pages`指的是伙伴分配器管理的总页面数；Page类型的指针`base`，指向伙伴分配器管理的内存空间的起始页；`max_order`指的是实际设计时，总页数的阶数(例如实际设计下，只考虑64个页，那么此时max_order = log_2(64) = 6)；`nr_free`指的是当前状态下空闲的页面数，会随着内存分配和释放进行增减
 
@@ -158,6 +135,8 @@ struct BuddySystem
     size_t nr_free; //空闲页面数
 };
 ```
+
+#### 2.2 初始化
 
 然后是伙伴分配器的初始化，假设我们初始化了一个管理n个页的伙伴分配器，其中头页面的地址保存在base指针中。我们首先需要判定页面数是否满足2的幂次，倘若不为2的幂次，后续就无法折半分配。在确定总页面数后，就可以确定具体需要多大的free_list数组，并对free_list中的每个链表进行初始化。随后，初始化所有页面状态，将所有页面状态设置为未分配，并将整个内存空间(共有n个页)作为一个空闲块放到最高阶的free_list中。
 
@@ -201,6 +180,8 @@ static void buddy_init_system(struct BuddySystem* buddy, size_t n, struct Page* 
     list_add(&first_page->page_link, &buddy->free_list[buddy->max_order]);
 }
 ```
+
+#### 2.3 分配和释放
 
 然后是内存管理中最重要的两个函数：内存的分配和内存的释放。
 
@@ -331,6 +312,8 @@ static void buddy_free_block(struct BuddySystem* buddy, struct Page* block, size
 - void buddy_free_pages(struct Page *base, size_t n)：调用buddy_free_block(&buddy_system, base, n);
 - size_t buddy_nr_free_pages(void)：返回buddy_system.nr_free
 
+### 3. 测试
+
 为了进行测验和查看测验结果，设计了测试函数`buddy_check`和查看伙伴分配器状态的函数：
 
 ```c
@@ -434,7 +417,8 @@ static void buddy_check(void)
     cprintf("=== Check Complete ===\n");
 }
 ```
-##四、实验内容（扩展2）
+## Challenge2：任意大小的内存单元slub分配算法(需要编程)
+
 ### 1. 原理概述
 
 ​        SLUB（The *SLAB allocator*, later improved as *SLUB*）是一种内核级高效内存分配算法，该算法建立在页级内存分配器之上，主要用于管理内核中大量小对象的动态分配与释放，之前我们所实现的`first_fit`等算法都是以页为单位的，但是难免会有用户所需的内存大小其实不足一页，那么此时slub算法的作用就体现出来了，slub算法的核心思想如下：
@@ -585,13 +569,8 @@ void slub_free(void *obj) {
 5. 多 cache 混合分配时是否能互不干扰
 6. 对非法释放操作的安全防护是否有效
 
-​       具体的测试代码见仓库中的代码文件。
+​       具体的测试代码见仓库中的代码文件。 
 
-## 实验内容(challenge3)
+## Challenge3：硬件的可用物理内存范围的获取方法(思考题)
 
-
-Bootloader 会在内存中放一个叫 设备树（Device Tree Blob，DTB） 的数据结构。
-它里面有一个 /memory 节点，写明了可用物理内存的起始地址和大小。
-
-当操作系统开始运行时，Bootloader 会把 DTB 的地址放进寄存器（比如 RISC-V 的 a1）。
-OS 启动后，从这个地址读取并解析 DTB，就能知道有哪些物理内存区域可以使用。
+Bootloader会在内存中放一个叫设备树（Device Tree Blob，DTB）的数据结构。它里面有一个memory节点，写明了可用物理内存的起始地址和大小。当操作系统开始运行时，Bootloader会把DTB的地址放进寄存器（比如 RISC-V 的 a1）。OS启动后，从这个地址读取并解析DTB，就能知道有哪些物理内存区域可以使用。
