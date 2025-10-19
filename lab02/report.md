@@ -1,6 +1,7 @@
 <center>
 <h1>OS-lab02实验报告</h1>
 </center>
+
 ## 练习1：理解first-fit 连续物理内存分配算法(思考题)
 
 - 函数`default_init_memmap`主要用于初始化一段连续的内存区域，将其转化为一个空闲的内存块。
