@@ -15,200 +15,243 @@ static size_t fix_size(size_t n)
     return res;
 }
 
-struct Buddy2
+//计算阶数，即log2(n)，一般输入的n都是2的幂次
+static int get_order(size_t n) 
 {
-    size_t size;//size是内存的总页面数，也是buddy2二叉树根节点的longest数值
-    struct Page* base;
-    //我们需要记录内存中第一个页面的地址，base+offset就可以获取目标页面
-    struct Page* original_base;  //记录原始base指针，用于访问longest数组
+    int order = 0;
+    while (n > 1) 
+    {
+        n >>= 1;
+        order++;
+    }
+    return order;
+}
 
-    //考虑到无法使用malloc动态分配longest数组，我们将其直接存放在伙伴系统管理的内存中
-    //所以我们只需要记录longest数组的大小即可
-    size_t longest_size;
+//计算2的幂次，即2^order
+static size_t power_of_two(int order) 
+{
+    return 1UL << order;
+}
+
+//我们用free_list数组来管理空闲页面，free_list[i]表示阶数为i的空闲页面链表
+//比如说：free_list[0]表示阶数为0的空闲页面链表，也就是最小内存块的空闲页面链表，其实就是单页的空闲页面链表
+struct BuddySystem
+{
+    //总页面数，也就是内存块的大小
+    size_t total_pages;
+    struct Page* base;
+
+    //我们知道内存总页数为32768，阶数为15，所以free_list数组大小为16就可以满足需求
+    list_entry_t free_list[16]; 
+    int max_order; 
+    size_t nr_free; //空闲页面数
 };
 
-static void buddy2_init(struct Buddy2* buddy, size_t n, struct Page* base)
+static void buddy_init_system(struct BuddySystem* buddy, size_t n, struct Page* base)
 {
-    //初始化函数，设计一颗完全二叉树，将内存空间分为n个页，页的数目为2的幂次
+    //这个函数的作用是初始化伙伴分配器，输入参数为管理的内存空间的总页面数n和内存空间的首地址base
+
+    //确保页面数是2的幂次
     if (n < 1 || !is_order_of_two(n))
     {
-        //如果页的数目不为2的幂次，那么就无法后续进行折半生成完全二叉树，返回错误
         cprintf("Error: size must be a power of two.\n");
-        buddy->size = 0;
+        buddy->total_pages = 0;
         return;
     }
-    buddy->size = n;
-    buddy->original_base = base;  // 保存原始base指针
-    buddy->longest_size = 2 * n - 1;
-
-    //直接使用伙伴系统管理的内存开头作为longest数组，无需malloc
-    //这里假设longest数组存放在伙伴系统管理的内存开始处
-    //我们需要为longest数组预留空间，所以实际可用的内存会减少
-    int* longest = (int*)base;  
-
-    int node_size = 2 * n;
-    for (size_t i = 0; i < buddy->longest_size; i++)
-    {
-        if (is_order_of_two(i + 1)) node_size /= 2;
-        //假设i+1为2的幂次，那么说明进入了二叉树新的一层，那么其对应的内存单元数目折半
-        longest[i] = node_size;
-    }
-
-    //调整base指针，跳过longest数组占用的空间
-    //longest数组占用了 (2*n-1) * sizeof(int) 字节
-    size_t metadata_size = buddy->longest_size * sizeof(int);
-
-    //将数组占用的字节数转换为页面数，向上取整，因为直接除以sizeof(struct Page)是向下取整
-    //向下取整显然不合理，所以加上page_size-1再除以page_size
-    size_t pages_for_metadata = (metadata_size + sizeof(struct Page) - 1) / sizeof(struct Page);
     
-    //base指针指向内存块的第一个页面，也就是longest数组占用的页面之后的第一个页面
-    buddy->base = base + pages_for_metadata;
-    size_t available_pages = n - pages_for_metadata;
+    buddy->total_pages = n;
+    buddy->base = base;
+
+    //获取n的阶数，这个阶数可以用来确定free_list数组的大小
+    buddy->max_order = get_order(n);
+    buddy->nr_free = n;
     
-    //如果内存大小大于4096，那么就向下取整到最近的2的幂次
-    if (n >= 4096) {
-        buddy->size = 1;
-        while (buddy->size * 2 <= available_pages) 
-        {
-            buddy->size *= 2;
-        }
-    } else {
-        // 小内存：直接使用输入的n，避免过度浪费
-        buddy->size = n;
+    //初始化所有free_list链表
+    for (int i = 0; i <= buddy->max_order; i++) {
+        list_init(&buddy->free_list[i]);
     }
     
-    // 重新计算longest数组，使用确定后的实际页面数
-    int actual_node_size = 2 * buddy->size;
-    for (size_t i = 0; i < buddy->longest_size; i++)
-    {
-        if (is_order_of_two(i + 1)) actual_node_size /= 2;
-        longest[i] = actual_node_size;
+    //初始化所有页面状态，将所有页面状态设置为未分配，引用计数为0
+    for (size_t i = 0; i < n; i++) {
+        struct Page* page = base + i;
+        page->flags = 0;
+        page->property = 0;
+        set_page_ref(page, 0);
+        list_init(&page->page_link);  //初始化链表节点
     }
+    
+    //将整个内存块作为一个大的空闲块添加到最高阶的free_list中
+    struct Page* first_page = base;
+    first_page->property = n;  //记录这个块的大小
+    list_add(&first_page->page_link, &buddy->free_list[buddy->max_order]);
 }
 
-static int buddy2_alloc(struct Buddy2* buddy, size_t n)
+//向指定阶数的free_list中插入内存块
+static void buddy_insert_block(struct BuddySystem* buddy, struct Page* block, int order)
 {
-    //如果要分配n个内存单元，使用fix_size函数，将其调整为适合的内存块大小
-    if (n <= 0) n = 1;
-    else if (!is_order_of_two(n)) n = fix_size(n);
-
-    // 使用original_base访问longest数组
-    int* longest = (int*)buddy->original_base;
-
-    if (longest[0] < (int)n) return -1;
-    //倘若目前内存总空间都无法满足n，那么自然无法进行分配
-
-    size_t index = 0;
-    int node_size;
-
-    //循环的目的在于找到合适的index，终止条件为node_size=n，也就是longest[index]=node_size=n时
-    for (node_size = buddy->size; node_size != (int)n; node_size /= 2)
-    {
-        if (longest[2 * index + 1] >= (int)n)
-        {
-            //假设当前节点的左儿子可以满足n，那么进入左子树继续遍历
-            index = 2 * index + 1;
-        }
-        else
-        {
-            index = 2 * index + 2;
-        }
+    if (!block || order < 0 || order > buddy->max_order) return;
+    
+    //设置块的大小
+    block->property = power_of_two(order);
+    
+    //如果链表为空，直接插入
+    if (list_empty(&buddy->free_list[order])) {
+        list_add(&buddy->free_list[order], &block->page_link);
+        return;
     }
-    //找到合适的index后，将其内存块页面值变为0(这一内存块的首页面property为0)
-    longest[index] = 0;
-
-    int offset = (index + 1) * node_size - buddy->size;
-    //offset的计算是这样的流程：
-        //offset = node_size * pos，其中node_size = s，pos指当前index在该层的第几个
-        //level = log_2{size / node_size}
-        //first_index = 2 ^ level - 1
-        //pos = index - first_index
-        //offset = node_size * (index - 2 ^ level + 1) = (index + 1) * node_size - size
-
-    while (index)
-    {
-        index = (index - 1) / 2;
-        longest[index] = longest[2 * index + 1] > longest[2 * index + 2] ?
-                                longest[2 * index + 1] : longest[2 * index + 2];
-        //逐级向上遍历，修改父节点的longest值，取两儿子节点中数值较大的
-    }
-    return offset;
-}
-
-static void buddy2_free(struct Buddy2* buddy, int offset)
-{
-    if (offset < 0 || offset >= (int)buddy->size) return;
-
-    // 使用original_base访问longest数组
-    int* longest = (int*)buddy->original_base;
-
-    int node_size = 1;
-    size_t index = buddy->size - 1 + offset;
-    //我们先假设释放的内存为最小内存块，所代表的可分配内存空间为1个单元
-    //size-1为所有叶子节点的开头，比如size=8时，第一个叶子节点的index=7
-    //加上offset后，就确定了我们要释放的是哪个最小内存单元
-
-    //找到第一个标记为'完全被占用'的节点，获取其Index和该节点理论的内存块大小
-    for (; longest[index]; index = (index - 1) / 2)
-    {
-        node_size *= 2;
-        if (index == 0) return;
-    }
-
-    longest[index] = node_size;
-    while (index)
-    {
-        index = (index - 1) / 2;
-        node_size *= 2;
-        int ll = longest[2 * index + 1];
-        int rl = longest[2 * index + 2];
-
-        //加入左右儿子数值之和与父节点理论值一致，那么恢复父节点的longest值
-        if (ll + rl == node_size) 
-        {
-            longest[index] = node_size;
-        } 
-        else 
-        {
-            longest[index] = ll > rl ? ll : rl;
+    
+    //否则按地址顺序插入（从低到高），找到第一个大于block的页面，插入到它前面
+    list_entry_t* le = &buddy->free_list[order];
+    while ((le = list_next(le)) != &buddy->free_list[order]) {
+        struct Page* page = le2page(le, page_link);
+        if (block < page) {
+            list_add_before(le, &block->page_link);
+            return;
         }
     }
+    
+    //如果没找到合适位置，插入到链表末尾
+    list_add(&buddy->free_list[order], &block->page_link);
 }
 
-static void buddy2_destroy(struct Buddy2* buddy) 
+//从伙伴分配器中分配内存块，所需的内存块大小为n，返回值为分配的内存块的首地址
+static struct Page* buddy_alloc_block(struct BuddySystem* buddy, size_t n)
 {
-    buddy->size = 0;
-    buddy->base = NULL;
-    buddy->original_base = NULL;
-    buddy->longest_size = 0;
-}
-
-static void buddy2_show_array(struct Buddy2* buddy, int start, int max_order) 
-{
-    // 使用original_base访问longest数组
-    int* longest = (int*)buddy->original_base;
-
-    cprintf("Buddy array (longest) from index %d:\n", start);
-    for (int i = start; i < (int)buddy->longest_size && i < (1 << (max_order + 1)) - 1; i++) 
+    if (n <= 0 || n > buddy->nr_free) return NULL;
+    
+    //对n进行调整，使其变为2的幂次，便于后续的分配
+    //随后获取调整后的n的阶数，即log2(n)，这样就知道要在free_list[required_order]中寻找空闲页面
+    int required_order = get_order(fix_size(n));
+    
+    //从所需阶数开始向上查找可用的块
+    int current_order = required_order;
+    while (current_order <= buddy->max_order) 
     {
-        cprintf("longest[%d] = %d\n", i, longest[i]);
+        if (!list_empty(&buddy->free_list[current_order])) 
+        {
+            //如果在free_list[current_order]中存在空闲页面，那么就从链表中移除一个页面，并返回这个页面
+            struct Page* block = le2page(buddy->free_list[current_order].next, page_link);
+            list_del(&block->page_link);
+            
+            //如果块比需要的大，需要分割
+            //例如在总内存块大小为16的内存空间中，需要分配8个页面，但是此时free_list[3]中不存在空闲页面
+            //那么就继续向上查找，此时free_list[4]中存在空闲页面，那么就从free_list[4]中移除一个页面，并对其进行分割
+            while (current_order > required_order) 
+            {
+                current_order--;
+                size_t half_size = power_of_two(current_order);
+                
+                //创建伙伴块，其实就是将当前块分割成两个大小为half_size的块，然后将其添加到对应阶数的链表中
+                struct Page* buddy_block = block + half_size;
+                
+                //将伙伴块添加到对应阶数的链表中
+                buddy_insert_block(buddy, buddy_block, current_order);
+            }
+            
+            // 标记块为已分配
+            block->property = 0;
+            buddy->nr_free -= power_of_two(required_order);  // 减少实际分配的块大小
+            
+            return block;
+        }
+        current_order++;
     }
+    
+    return NULL;  // 没有找到合适的块
 }
 
-static struct {
-    size_t nr_free; 
-    struct Buddy2 buddy_storage;  
-} buddy_area;
+//释放内存块到伙伴分配器，输入参数为要释放的内存块的首地址block和要释放的内存块的大小n
+static void buddy_free_block(struct BuddySystem* buddy, struct Page* block, size_t n)
+{
+    if (!block || n <= 0) return;
+    
+    //计算块的阶数（按2的幂次处理）
+    //因为分配的时候是对n进行调整，使其变为2的幂次，然后再分配n个页面
+    //所以这里看似是释放了n个页面，但实际上是释放了2^order个页面
+    int order = get_order(fix_size(n));
+    size_t block_size = power_of_two(order);
+    
+    //重置页面状态（只重置实际使用的页面）
+    for (size_t i = 0; i < n; i++) {
+        struct Page* page = block + i;
+        page->flags = 0;
+        set_page_ref(page, 0);
+    }
+    
+    //设置块的大小，不急着先把block代表的内存块加入到free_list中，先尝试与伙伴块合并
+    block->property = block_size;
+    
+    //尝试与伙伴块合并
+    while (order < buddy->max_order) 
+    {
+        //计算伙伴块的地址
+        size_t buddy_offset = (block - buddy->base) ^ block_size;
+        struct Page* buddy_block = buddy->base + buddy_offset;
+        
+        //检查伙伴块是否在同一阶数的free_list中
+        list_entry_t* le = &buddy->free_list[order];
+        int found_buddy = 0;
+        while ((le = list_next(le)) != &buddy->free_list[order]) {
+            struct Page* page = le2page(le, page_link);
+            if (page == buddy_block) {
+                found_buddy = 1;
+                break;
+            }
+        }
+        
+        if (found_buddy) {
+            // 找到伙伴块，进行合并
+            list_del(&buddy_block->page_link);
+            
+            // 选择地址较小的块作为合并后的块
+            if (buddy_block < block) {
+                block = buddy_block;
+            }
+            
+            // 更新块大小和阶数
+            block_size *= 2;
+            order++;
+            block->property = block_size;
+        } else {
+            // 没有找到伙伴块，停止合并
+            break;
+        }
+    }
+    
+    // 将块添加到对应阶数的free_list中
+    buddy_insert_block(buddy, block, order);
+    buddy->nr_free += block_size;
+}
 
-#define nr_free (buddy_area.nr_free)
-#define buddy (buddy_area.buddy_storage)
-#define MAX_BUDDY_ORDER 10  // 最大块阶数，例如 2^10 = 1024 页
+// 显示伙伴分配器状态
+static void buddy_show_status(struct BuddySystem* buddy) 
+{
+    cprintf("=== Buddy System Status ===\n");
+    cprintf("Total pages: %d, Free pages: %d, Max order: %d\n", 
+            buddy->total_pages, buddy->nr_free, buddy->max_order);
+    
+    for (int i = 0; i <= buddy->max_order; i++) {
+        int count = 0;
+        list_entry_t* le = &buddy->free_list[i];
+        while ((le = list_next(le)) != &buddy->free_list[i]) {
+            count++;
+        }
+        if (count > 0) {
+            cprintf("Order %d (size %d): %d blocks\n", i, power_of_two(i), count);
+        }
+    }
+    cprintf("===========================\n");
+}
 
+// 全局伙伴分配器实例
+static struct BuddySystem buddy_system;
 
 static void buddy_init(void) 
 {
-    nr_free = 0;
+    buddy_system.total_pages = 0;
+    buddy_system.nr_free = 0;
+    buddy_system.max_order = 0;
+    buddy_system.base = NULL;
 }
 
 static void buddy_init_memmap(struct Page *base, size_t n) 
@@ -216,139 +259,99 @@ static void buddy_init_memmap(struct Page *base, size_t n)
     //初始化内存块，块大小为n个页面，块中第一个页的地址为 base
     assert(n > 0);
     if (!is_order_of_two(n)) n = fix_size(n);
-
-    //初始化所有页面状态
-    for(struct Page *p = base; p != base + n; p++) 
-    {
-        p->flags = 0;
-        p->property = 0;
-        set_page_ref(p, 0);
-    }
-
-    //如果已经初始化过伙伴系统，先销毁
-    if (buddy.size > 0) {
-        buddy2_destroy(&buddy);
-    }
-    
-    //初始化伙伴系统，使用输入的n作为实际管理的内存大小
-    buddy2_init(&buddy, n, base);
-    nr_free += buddy.size;
-    
+    buddy_init_system(&buddy_system, n, base);
 }
 
 static struct Page *buddy_alloc_pages(size_t n) {
     assert(n > 0);
-    if (n > nr_free) return NULL;
-    
-    size_t alloc_size = fix_size(n);
-    int offset = buddy2_alloc(&buddy, alloc_size);
-    if (offset < 0) return NULL;
-    
-    //直接通过偏移量计算分配的页面地址
-    struct Page *page = buddy.base + offset;
-    
-    //更新空闲页面计数
-    nr_free -= n;
-    
-    return page;
+    if (n > buddy_system.nr_free) return NULL;   
+    return buddy_alloc_block(&buddy_system, n);
 }
 
 static void buddy_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
-    
-    //重置页面状态
-    for (struct Page *p = base; p != base + n; p++) {
-        p->flags = 0;
-        set_page_ref(p, 0);
-    }
-    
-    //通过buddy系统释放内存
-    int offset = base - buddy.base;
-    buddy2_free(&buddy, offset);
-    
-    nr_free += n;
+    assert(base >= buddy_system.base && base < buddy_system.base + buddy_system.total_pages);    
+    buddy_free_block(&buddy_system, base, n);
 }
 
 static size_t buddy_nr_free_pages(void) {
-    return nr_free;
+    return buddy_system.nr_free;
 }
 
 static void show_buddy_array(int start, int max_order) {
-    if (buddy.size > 0) {
-        buddy2_show_array(&buddy, start, max_order);
-    }
+    buddy_show_status(&buddy_system);
 }
 
 static void buddy_check(void) 
 {
     cprintf("=== Buddy System Check ===\n");
-    cprintf("Total free pages: %d\n", nr_free);
-    cprintf("Buddy system size: %d\n", buddy.size);
+    cprintf("Total free pages: %d\n", buddy_system.nr_free);
+    cprintf("Buddy system size: %d\n", buddy_system.total_pages);
     
-    if (buddy.size > 0) {
-        cprintf("Initial Buddy array status:\n");
-        buddy2_show_array(&buddy, 0, 4);
+    if (buddy_system.total_pages > 0) {
+        cprintf("Initial Buddy system status:\n");
+        buddy_show_status(&buddy_system);
         
         // 测试分配和释放
         cprintf("\n=== Testing Allocation and Deallocation ===\n");
         
         // 测试1: 分配1页
-        cprintf("Test 1: Allocating 1024 page\n");
-        struct Page *page1 = buddy_alloc_pages(1024);
+        cprintf("Test 1: Allocating 1 page\n");
+        struct Page *page1 = buddy_alloc_pages(1);
         if (page1) {
-            cprintf("Allocated 1 page at offset %d\n", page1 - buddy.base);
-            cprintf("Free pages after allocation: %d\n", nr_free);
-            buddy2_show_array(&buddy, 0, 4);
+            cprintf("Allocated 1 page at offset %d\n", page1 - buddy_system.base);
+            cprintf("Free pages after allocation: %d\n", buddy_system.nr_free);
+            buddy_show_status(&buddy_system);
         }
         
         // 测试2: 分配2页
-        cprintf("\nTest 2: Allocating 2048 pages\n");
-        struct Page *page2 = buddy_alloc_pages(2048);
+        cprintf("\nTest 2: Allocating 2 pages\n");
+        struct Page *page2 = buddy_alloc_pages(2);
         if (page2) {
-            cprintf("Allocated 2 pages at offset %d\n", page2 - buddy.base);
-            cprintf("Free pages after allocation: %d\n", nr_free);
-            buddy2_show_array(&buddy, 0, 4);
+            cprintf("Allocated 2 pages at offset %d\n", page2 - buddy_system.base);
+            cprintf("Free pages after allocation: %d\n", buddy_system.nr_free);
+            buddy_show_status(&buddy_system);
         }
         
         // 测试3: 分配4页
-        cprintf("\nTest 3: Allocating 4096 pages\n");
-        struct Page *page4 = buddy_alloc_pages(4096);
+        cprintf("\nTest 3: Allocating 4 pages\n");
+        struct Page *page4 = buddy_alloc_pages(4);
         if (page4) {
-            cprintf("Allocated 4 pages at offset %d\n", page4 - buddy.base);
-            cprintf("Free pages after allocation: %d\n", nr_free);
-            buddy2_show_array(&buddy, 0, 4);
+            cprintf("Allocated 4 pages at offset %d\n", page4 - buddy_system.base);
+            cprintf("Free pages after allocation: %d\n", buddy_system.nr_free);
+            buddy_show_status(&buddy_system);
         }
         
         // 测试4: 释放2页
-        cprintf("\nTest 4: Freeing 2048 pages\n");
+        cprintf("\nTest 4: Freeing 2 pages\n");
         if (page2) {
-            buddy_free_pages(page2, 2048);
-            cprintf("Freed 2 pages at offset %d\n", page2 - buddy.base);
-            cprintf("Free pages after freeing: %d\n", nr_free);
-            buddy2_show_array(&buddy, 0, 4);
+            buddy_free_pages(page2, 2);
+            cprintf("Freed 2 pages at offset %d\n", page2 - buddy_system.base);
+            cprintf("Free pages after freeing: %d\n", buddy_system.nr_free);
+            buddy_show_status(&buddy_system);
         }
         
         // 测试5: 释放1页
-        cprintf("\nTest 5: Freeing 1024 pages\n");
+        cprintf("\nTest 5: Freeing 1 page\n");
         if (page1) {
-            buddy_free_pages(page1, 1024);
-            cprintf("Freed 1 page at offset %d\n", page1 - buddy.base);
-            cprintf("Free pages after freeing: %d\n", nr_free);
-            buddy2_show_array(&buddy, 0, 4);
+            buddy_free_pages(page1, 1);
+            cprintf("Freed 1 page at offset %d\n", page1 - buddy_system.base);
+            cprintf("Free pages after freeing: %d\n", buddy_system.nr_free);
+            buddy_show_status(&buddy_system);
         }
         
         // 测试6: 释放4页
-        cprintf("\nTest 6: Freeing 4096 pages\n");
+        cprintf("\nTest 6: Freeing 4 pages\n");
         if (page4) {
-            buddy_free_pages(page4, 4096);
-            cprintf("Freed 4 pages at offset %d\n", page4 - buddy.base);
-            cprintf("Free pages after freeing: %d\n", nr_free);
-            buddy2_show_array(&buddy, 0, 4);
+            buddy_free_pages(page4, 4);
+            cprintf("Freed 4 pages at offset %d\n", page4 - buddy_system.base);
+            cprintf("Free pages after freeing: %d\n", buddy_system.nr_free);
+            buddy_show_status(&buddy_system);
         }
         
         cprintf("\n=== Final State ===\n");
-        cprintf("Final free pages: %d\n", nr_free);
-        buddy2_show_array(&buddy, 0, 4);
+        cprintf("Final free pages: %d\n", buddy_system.nr_free);
+        buddy_show_status(&buddy_system);
     }
     
     cprintf("=== Check Complete ===\n");
