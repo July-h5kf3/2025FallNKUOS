@@ -589,12 +589,9 @@ void slub_free(void *obj) {
 
 ## 实验内容(challenge3)
 
-<<<<<<< HEAD
-#### 实验内容(challenge3)
+
 Bootloader 会在内存中放一个叫 设备树（Device Tree Blob，DTB） 的数据结构。
 它里面有一个 /memory 节点，写明了可用物理内存的起始地址和大小。
 
 当操作系统开始运行时，Bootloader 会把 DTB 的地址放进寄存器（比如 RISC-V 的 a1）。
 OS 启动后，从这个地址读取并解析 DTB，就能知道有哪些物理内存区域可以使用。
-=======
->>>>>>> c89c75b12e46e7c679fdb170d8543c96525222f8
