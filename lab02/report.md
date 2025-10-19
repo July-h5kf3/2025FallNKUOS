@@ -2,7 +2,7 @@
 <h1>OS-lab02实验报告</h1>
 </center>
 
-### 实验要求
+## 实验要求
 
 1.理解first-fit 连续物理内存分配算法
 
@@ -28,7 +28,7 @@
 
 如果 OS 无法提前知道当前硬件的可用物理内存范围，请问你有何办法让 OS 获取可用物理内存范围？
 
-#### 实验内容(part 1 + part2)
+## 实验内容(part 1 + part2)
 
 练习一：
 
@@ -123,8 +123,10 @@ Total Score: 25/25
 
 此外buddy system算法以及slub分配算法可以进一步提高算法的性能以及内存利用率，我们将在challenge部分进行实现与测试。
 
-#### 实验内容(challenge1)
+## 实验内容(challenge1)
 
-#### 实验内容(challenge2)
+## 实验内容(challenge2)
 
-#### 实验内容(challenge3)
+
+
+## 实验内容(challenge3)
