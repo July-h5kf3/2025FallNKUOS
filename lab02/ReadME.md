@@ -51,8 +51,8 @@
 
 
 
-- [ ] 冯：扩展练习Challenge：任意大小的内存单元slub分配算法，最后MarkDown文件以你的风格进行书写
-- [ ] 袁：扩展练习Challenge：buddy system（伙伴系统）分配算法 + (思考题)
+- [x] 冯：扩展练习Challenge：任意大小的内存单元slub分配算法，最后MarkDown文件以你的风格进行书写
+- [x] 袁：扩展练习Challenge：buddy system（伙伴系统）分配算法 + (思考题)
 - [x] 刘：练习1 + 练习2
 
 
