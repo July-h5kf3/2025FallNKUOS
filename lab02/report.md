@@ -426,7 +426,6 @@ static void buddy_check(void)
 
 - **分层管理：**在该算法中我们采用两层架构的方式，第一层使用我们基础的页分配器算法（`first_fit`）以页为单位分配内存，第二层则将每页按照固定的大小分为多个对象，以对象为单位进行分配和释放。
 - **Cache机制：**前面提到我们要将每页按照固定的大小进行分割，那么这个“固定大小”也可能有很多，所以我们对于不同大小的对象建立不同的Cache，每一个Cache管理按照相同大小分割的若干slab（页），从而减少碎片并提高分配效率。
-- **对象复用与局部性：**如果某个slab之前分配出去的对象都被释放，自身变为完全空闲，我们并不会立马归还给页分配器，而是仍保留该slab，以便下次快速重用，从而减少频繁的页分配。
 
 ### 2. 主要机制
 
@@ -537,27 +536,40 @@ void *slub_alloc_size(size_t size){
 
 #### 3.5 对象的释放
 
-​         相应的释放函数逻辑并不难，当我们想释放某一个对象时，将该对象的指针`obj`传入释放函数，通过该指针指向的位置我们找到它所属的`slab`和`cache`，根据`obj`所指向的地址与该`slab`的`page`基址的差值我们可以得到该对象在`slab`中的索引位置，然后将该位置的标志位重置为`0`，空闲对象数量`+1`即可：
+​         相应的释放函数逻辑并不难，当我们想释放某一个对象时，将该对象的指针`obj`传入释放函数，通过该指针指向的位置我们找到它所属的`slab`和`cache`，根据`obj`所指向的地址与该`slab`的`page`基址的差值我们可以得到该对象在`slab`中的索引位置，然后将该位置的标志位重置为`0`，空闲对象数量`+1`即可（要注意的是，当一个`slab`完全空闲时，我们会调用底层分配器将该页释放,同时在对应的`cache`中也要将这个`slab`移去，将其后面的`slab`前移）：
 
 ```c
 void slub_free(void *obj) {
     if(obj==NULL){ return; }
     Slab *slab=NULL;
     Cache *cache=get_cache(obj,&slab);
-    if (cache==NULL || slab==NULL) { return; }
+    if (cache==NULL || slab==NULL) { 
+        return; 
+    }
     uintptr_t base=(uintptr_t)page2kva(slab->page);
     size_t idx=((uintptr_t)obj - base) / cache->obj_size;
 
-    if (idx < PGSIZE / cache->obj_size && slab->used[idx]){
+    if (idx < PGSIZE / cache->obj_size && slab->used[idx]){//这里确保了不会二次释放
         slab->used[idx] = 0;// 标记为空闲
-        slab->free_cnt++;// 增加空闲计数
+        slab->free_num++;// 增加空闲计数
+    }
+    //如果该slab完全空闲的话 就通过底层页分配器释放该页
+    if (slab->free_num==(PGSIZE / cache->obj_size)){
+        for (size_t i=0;i<cache->slab_count;i++) {
+            if (&cache->slabs[i]==slab){
+                for (size_t j=i;j<cache->slab_count-1;j++){
+                    cache->slabs[j]=cache->slabs[j + 1];
+                }
+                cache->slab_count--;
+                break;
+            }
+        }
+        default_free_pages(slab->page,1);
     }
 }
 ```
 
-​        那么我们是怎样找到它所在的`slab`和`cache`的呢，这里我们就要用到另一个函数`get_cache`了，我们是通过遍历所有缓存的所有`slab`，检查给定的 `obj` 指针是否落在某个 `slab` 的虚拟地址空间内，如果找到，就返回对应的 `cache` 和 `slab`。（篇幅原因就不展示该函数了）
-
-​        需要注意的是**当一个 slab 的所有对象都被释放后，该 slab 占用的物理页并不会立即归还给系统，而是留作后续分配时复用。**
+​        那么我们是怎样找到它所在的`slab`和`cache`的呢，这里我们就要用到另一个函数`get_cache`了，我们是通过遍历所有缓存的所有`slab`，检查给定的 `obj` 指针是否落在某个 `slab` 的虚拟地址空间内，如果找到，就返回对应的 `cache` 和 `slab`。（篇幅原因就不展示该函数了）。
 
 ### 4. 测试
 

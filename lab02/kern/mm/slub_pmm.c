@@ -186,8 +186,8 @@ static Cache *select_cache(size_t size){
 //核心分配函数
 void *slub_alloc_size(size_t size){
     if(size==0){
-        return NULL;
         cprintf("[SLUB] Allocation failed: request %d bytes is nothing\n", size);
+        return NULL;
     }
     //根据size选择合适的cache
     Cache *cache=select_cache(size);
@@ -261,6 +261,20 @@ void slub_free(void *obj) {
         cprintf("[SLUB] free obj=%p from cache(%dB) slab #%d (%d free left)\n",
                 obj, cache->obj_size,
                 (size_t)(slab - cache->slabs), slab->free_num);
+    }
+    //如果该slab完全空闲的话 就通过底层页分配器释放该页
+    if (slab->free_num==(PGSIZE / cache->obj_size)){
+        for (size_t i=0;i<cache->slab_count;i++) {
+            if (&cache->slabs[i]==slab){
+                for (size_t j=i;j<cache->slab_count-1;j++){
+                    cache->slabs[j]=cache->slabs[j + 1];
+                }
+                cache->slab_count--;
+                break;
+            }
+        }
+        default_free_pages(slab->page,1);
+        cprintf("[SLUB] Fully free slab recycled: %p\n", slab->page);
     }
 }
 //与pmm.c兼容的接口
