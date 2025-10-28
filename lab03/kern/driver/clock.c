@@ -5,15 +5,18 @@
 #include <riscv.h>
 
 volatile size_t ticks;
+volatile size_t prints;
 
 static inline uint64_t get_cycles(void) {
 #if __riscv_xlen == 64
     uint64_t n;
+    __asm__ __volatile__("mret");
     __asm__ __volatile__("rdtime %0" : "=r"(n));
     return n;
 #else
     uint32_t lo, hi, tmp;
     __asm__ __volatile__(
+        "mret"
         "1:\n"
         "rdtimeh %0\n"
         "rdtime %1\n"

@@ -8,6 +8,7 @@
 #include <riscv.h>
 #include <stdio.h>
 #include <trap.h>
+#include <sbi.h>
 
 #define TICK_NUM 100
 
@@ -130,6 +131,15 @@ void interrupt_handler(struct trapframe *tf) {
              *(3)当计数器加到100的时候，我们会输出一个`100ticks`表示我们触发了100次时钟中断，同时打印次数（num）加一
             * (4)判断打印次数，当打印次数为10时，调用<sbi.h>中的关机函数关机
             */
+            clock_set_next_event();
+            if(++ticks % TICK_NUM == 0)
+            {
+                print_ticks();
+                if(++prints % 10 == 0)
+                {
+                    sbi_shutdown();
+                }
+            }
             break;
         case IRQ_H_TIMER:
             cprintf("Hypervisor software interrupt\n");
@@ -168,6 +178,9 @@ void exception_handler(struct trapframe *tf) {
              *(2)输出异常指令地址
              *(3)更新 tf->epc寄存器
             */
+            cprintf("Illegal instruction caught at 0x%08x\n", tf->epc);
+            cprintf("Exception type: Illegal instruction\n");
+            tf->epc += 4;
             break;
         case CAUSE_BREAKPOINT:
             //断点异常处理
@@ -176,6 +189,10 @@ void exception_handler(struct trapframe *tf) {
              *(2)输出异常指令地址
              *(3)更新 tf->epc寄存器
             */
+            cprintf("Breakpoint caught at 0x%08x\n", tf->epc);
+            cprintf("Exception type: Breakpoint\n");
+            tf->epc += 4;
+            //正常来说tf->epc应该变成异常处理的函数的地址，但是这里异常处理就是简单的输出信息然后返回因此在处理完之后直接对epc加4即可
             break;
         case CAUSE_MISALIGNED_LOAD:
             break;
