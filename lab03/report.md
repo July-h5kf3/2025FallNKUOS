@@ -61,6 +61,125 @@ STORE x31, 31*REGBYTES(sp)
 
 ## Challenge2：理解上下文切换机制
 
+回答：在trapentry.S中，汇编代码`csrw sscratch, sp`；`csrrw s0, sscratch, x0`实现了什么操作，目的是什么？为什么宏SAVE_ALL里面保存了`stval`和`scause`这些csr，而在宏RESTORE_ALL里面却不还原它们？那这样store的意义何在呢？
+
+我们知道，在操作系统中，中断指的是打断CPU当前正在执行的程序，转而去执行另一程序(即中断处理程序)的过程。当中断的处理结束后，CPU将会恢复到之前中断的位置继续执行。这意味着我们需要将中断发生时CPU的状态保存下来，这样在结束中断处理后才能正确的继续先前程序的执行。
+
+首先，我们先简要说明一下发生中断时CPU需要保存的内容：
+
+- 原始sp(发生陷入之前的栈顶指针)
+
+- 通用寄存器数据(从寄存器x0到寄存器x31的全部寄存器数据，注意x2(sp)的数据额外处理)
+- 状态寄存器sstatus(保存CPU当前的运行控制位，例如SIE决定是否允许中断，SPIE保存陷入前的SIE状态)
+- 当前CPU的PC值(即触发trap的那条指令的地址，也是中断返回地址)
+- stval(用于保存异常相关的“出错虚拟地址”，例如缺页异常时保存引起异常的虚拟地址)
+- scause(说明此次trap的原因，是中断还是异常？具体是哪种类型？)
+
+这总共36个寄存器也被称作CPU的上下文context，我们**通过两个宏来实现上下文切换的机制**：
+
+| 宏            | 功能                                   |
+| ------------- | -------------------------------------- |
+| `SAVE_ALL`    | 保存所有寄存器和关键 CSR（上下文保存） |
+| `RESTORE_ALL` | 恢复寄存器和关键 CSR（上下文恢复）     |
+
+首先是第一个宏`SAVE_ALL`，用于保存所有寄存器和关键CSR，具体代码如下：
+
+```assembly
+.macro SAVE_ALL
+    
+    #保存原始sp，将原始sp的数据存入sscratch，然后栈顶向下开辟36个寄存器的空间
+    csrw sscratch, sp
+    addi sp, sp, -36 * REGBYTES
+    
+    #保存通用寄存器数据
+    #以x0寄存器为例：此时栈顶指针sp指向的一个REGBYTES的空间储存着x0寄存器中保存的数据
+    STORE x0, 0*REGBYTES(sp)
+    STORE x1, 1*REGBYTES(sp)
+    #接下来依次保存x3-x31的寄存器数值，x2寄存器sp的原值已经保存到了sscratch中
+
+    #保存重要的CSR
+    csrrw s0, sscratch, x0 #s0 = 原来的sscratch = 陷入前的sp；sscratch = 0
+    csrr s1, sstatus 
+    csrr s2, sepc          
+    #csrr s3, sbadaddr
+    csrr s3, stval         
+    csrr s4, scause
+
+    #将s0-s4寄存器数据放入到trapframe的尾部
+    STORE s0, 2*REGBYTES(sp)
+    STORE s1, 32*REGBYTES(sp)
+    STORE s2, 33*REGBYTES(sp)
+    STORE s3, 34*REGBYTES(sp)
+    STORE s4, 35*REGBYTES(sp)
+.endm
+```
+
+其次是第二个宏`RESTORE_ALL`，用于恢复寄存器和关键CSR，具体代码如下：
+
+```assembly
+.macro RESTORE_ALL
+    #获取sstatus：
+    #在地址32*REGBYTES+sp处保存着sstatus的数值，将其load至s1中，然后放回专用寄存器
+    LOAD s1, 32*REGBYTES(sp)
+    csrw sstatus, s1
+    
+    #获取sepc：获取中断发生时的指令地址
+    LOAD s2, 33*REGBYTES(sp)
+    csrw sepc, s2
+
+    #恢复通用寄存器的数据
+    #根据SAVE_ALL获取通用寄存器先前数据的保存地址，将其依次load回到通用寄存器中
+    LOAD x1, 1*REGBYTES(sp)
+    LOAD x3, 3*REGBYTES(sp)
+    #load x4-x31
+
+    #恢复中断发生前的栈顶地址
+    LOAD x2, 2*REGBYTES(sp)
+.endm
+```
+
+当发生中断或异常时，硬件会自动把当前PC保存至`sepc`，把当前状态保存至`sstatus`，然后跳转到 `stvec` 寄存器中保存的入口地址(此时认为所有的中断/异常处理程序相同)。在操作系统启动阶段，内核一般会设置`csrw stvec, __alltraps`，于是一旦trap发生，CPU将跳转到汇编标签`__alltraps`，执行下面的汇编代码中`__alltraps`部分，同样，在中断处理结束后，CPU跳转到汇编标签`__trapret`，调用宏`RESTORE_ALL`，恢复trap前的寄存器状态，然后执行`sret`指令返回到中断之前的CPU状态，继续执行。
+
+```assembly
+.globl __alltraps
+.align(2)
+__alltraps:
+    SAVE_ALL   #调用宏SAVE_ALL保存CPU所有现场
+    
+    move  a0, sp
+    jal trap
+    # sp should be the same as before "jal trap"
+    
+.globl __trapret
+__trapret:
+    RESTORE_ALL #将trap发生前的寄存器数值重新load回寄存器中
+    # return from supervisor call
+    sret
+```
+
+其中`sret`的作用在于：从 `sstatus.SPP`中恢复陷入前的特权级；从`sstatus.SPIE`中恢复中断使能位；从 `sepc`中取回陷入前的指令地址；通过`sepc`恢复PC值，从陷入前的那条指令继续执行。
+
+分析完代码后，我们来回答本任务的几个问题：
+
+1.汇编代码`csrw sscratch, sp`；`csrrw s0, sscratch, x0`实现了什么操作，目的是什么？
+
+其中，汇编代码`csrw sscratch, sp`实现的操作是将当前栈顶指针sp的值保存到控制寄存器sscratch中，因为在一旦中断发生，CPU将会自动切换到内核栈，而内核需要知道在发生trap前用户态的栈顶指针，后续才可以恢复上下文；
+
+而`csrrw s0, sscratch, x0`实际上实现了两个操作：
+
+- 一是将当前的控制寄存器 `sscratch` 中的值读到寄存器`s0`中，相当于寄存器`s0`保存了上下文切换前的栈顶指针；
+- 二是将寄存器`sscratch`写为0，之所以要对控制寄存器进行清零操作，是因为如果再次发生嵌套trap(例如内核代码执行时发生系统调用)，那么trap的入口代码就会对寄存器`sscratch`的值进行识别，若此时该寄存器中值为零，那么就可以确定当前trap是来自内核态而非用户态，这样就会依照S模式触发中断的路由进行。
+
+2.为什么宏SAVE_ALL里面保存了`stval`和`scause`这些csr，而在宏RESTORE_ALL里面却不还原它们？那这样store的意义何在呢？
+
+这些CSR反映的是中断发生前的上下文信息，保存它们的目的在于可以让内核的trap函数访问这些值然后进行处理：例如scause说明了本次trap的原因；stval说明了出错的虚拟地址；sepc说明了发生trap时CPU的PC值，也同样是中断处理结束后CPU应该返回继续执行的位置。这些信息对于trap函数进行中断处理是必要的，我们将这些信息保存于trapframe中，trap函数就知道要在哪个位置找到这些信息，然后进行对应的处理，这就是为什么一定要store这些CSR。
+
+而不用还原的原因在于：`stval`、`scause` 属于“只读诊断信息”，不需要也不应该进行修改，在下一次trap发生时，硬件会自动重新填入新的值；`sepc`在`RESTORE_ALL`之后的sret指令执行时还需要使用，此时对其进行还原会造成错误，在sret指令执行时，CPU会跳转到`sepc`指定的地址处继续执行，当下一次trap发生时，硬件也会自动为其填入新的值；`sstatus`同样会在sret指令执行时自动进行恢复，例如SIE恢复为SPIE的数值，并不需要在`RESTORE_ALL`中手动还原。
+
+
+
+
+
 
 
 
