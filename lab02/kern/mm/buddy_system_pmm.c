@@ -297,7 +297,7 @@ static void buddy_check(void)
         
         // 测试1: 分配1页
         cprintf("Test 1: Allocating 1 page\n");
-        struct Page *page1 = buddy_alloc_pages(1);
+        struct Page *page1 = buddy_alloc_pages(32678);
         if (page1) {
             cprintf("Allocated 1 page at offset %d\n", page1 - buddy_system.base);
             cprintf("Free pages after allocation: %d\n", buddy_system.nr_free);
@@ -334,7 +334,7 @@ static void buddy_check(void)
         // 测试5: 释放1页
         cprintf("\nTest 5: Freeing 1 page\n");
         if (page1) {
-            buddy_free_pages(page1, 1);
+            buddy_free_pages(page1, 32678);
             cprintf("Freed 1 page at offset %d\n", page1 - buddy_system.base);
             cprintf("Free pages after freeing: %d\n", buddy_system.nr_free);
             buddy_show_status(&buddy_system);
