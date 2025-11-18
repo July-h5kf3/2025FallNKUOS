@@ -1,4 +1,5 @@
 #include <default_pmm.h>
+#include <best_fit_pmm.h>
 #include <defs.h>
 #include <error.h>
 #include <kmalloc.h>
@@ -37,7 +38,8 @@ static void check_boot_pgdir(void);
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void)
 {
-    pmm_manager = &default_pmm_manager;
+    // pmm_manager = &default_pmm_manager;
+    pmm_manager = &best_fit_pmm_manager;
     cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }

@@ -8,6 +8,7 @@
 #include <riscv.h>
 #include <stdio.h>
 #include <trap.h>
+#include <sbi.h>
 #include <vmm.h>
 
 #define TICK_NUM 100

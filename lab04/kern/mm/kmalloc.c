@@ -87,7 +87,7 @@ static void *__slob_get_free_pages(gfp_t gfp, int order)
 
 #define __slob_get_free_page(gfp) __slob_get_free_pages(gfp, 0)
 
-static inline void __slob_free_pages(unsigned long kva, int order)
+static inline void __slob_free_pages(void *kva, int order)
 {
 	free_pages(kva2page(kva), 1 << order);
 }
@@ -281,7 +281,7 @@ void kfree(void *block)
 			{
 				*last = bb->next;
 				spin_unlock_irqrestore(&block_lock, flags);
-				__slob_free_pages((unsigned long)block, bb->order);
+				__slob_free_pages(block, bb->order);
 				slob_free(bb, sizeof(bigblock_t));
 				return;
 			}
