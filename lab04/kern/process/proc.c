@@ -105,7 +105,20 @@ alloc_proc(void)
          *       uint32_t flags;                             // Process flag
          *       char name[PROC_NAME_LEN + 1];               // Process name
          */
-        
+        proc->state = PROC_UNINIT;
+        proc->pid = -1; //将pid先设置为1，实际上在do_fork函数中分配pid
+        proc->runs = 0;  
+        proc->kstack = 0;  //内核栈指针由于尚未分配设置为0
+        proc->need_resched = 0;
+        proc->parent = NULL;
+        proc->mm = NULL;
+        memset(&(proc->context), 0, sizeof(struct context));
+        proc->tf = NULL;
+        proc->pgdir = boot_pgdir_pa;
+        proc->flags = 0;
+        memset(proc->name, 0, sizeof(proc->name));
+        proc->list_link.prev = proc->list_link.next = NULL;
+        proc->hash_link.prev = proc->hash_link.next = NULL;       
     }
     return proc;
 }
