@@ -260,6 +260,47 @@ void proc_run(struct proc_struct *proc)
 
 ## 扩展练习Challenge1：
 
+**说明语句`local_intr_save(intr_flag);....local_intr_restore(intr_flag);`是如何实现开关中断的？**
+
+​       首先在`RISC-V`架构中，`CPU`是否允许处理中断由 **sstatus.SIE**位控制的，为`1`表示开启中断，为`0`表示关闭中断，因此只要可以对`status`寄存器进行读写就可以实现中断的开关。
+
+- **`local_intr_save(intr_flag); `怎么“关中断并记住原状态”**
+
+  我们找到其函数定义为：
+
+  ```c
+  static inline bool __intr_save(void) {
+      if (read_csr(sstatus) & SSTATUS_SIE) {
+          intr_disable();
+          return 1;
+      }
+      return 0;
+  }
+  #define local_intr_save(x) \
+      do {                   \
+          x = __intr_save(); \
+      } while (0)
+  ```
+
+  故实现逻辑为首先通过`read_csr`读取 **sstatus 寄存器** 的值，然后检查其中的 **SIE 位**（如果是`1`代表中断处于开启状态，为`0`则表示中断处于关闭状态），若当前`SIE=1`，我们就调用 `intr_disable()` 清掉 SIE 位（关闭中断）并返回`1`（表示原来处于开启状态），但是若本来就是`SIE=0`，则不做任何操作只返回`0` ，所以执行完`local_intr_save(intr_flag);`后**中断一定处于关闭状态，并且`intr_flag`中记录了之前中断的状态**。
+
+- **`local_intr_restore(intr_flag);` 怎么“按原样恢复中断状态”**
+
+  该函数定义如下：
+
+  ```c
+  static inline void __intr_restore(bool flag) {
+      if (flag) {
+          intr_enable();
+      }
+  }
+  #define local_intr_restore(x) __intr_restore(x);
+  ```
+
+  逻辑为：如果`flag==1`，表示原来中断处于开启状态，此时就调用 `intr_enable()`，重新设置 SIE 位为 1 将中断打开；如果`flag==0`，表示原本就处于关闭中断的状态就什么也不做，保持关闭。
+
+综上所述，**`local_intr_save` **负责检查当前是否开中断，如果是开的就关掉并在`intr_flag`中记录之前的状态，**`local_intr_restore`**负责根据`intr_flag`恢复之前的状态（如果之前是开的，就重新开中断，如果是关的就保持）；故**它们是用 保存+恢复 SIE 位 的方式来实现“安全关中断+按原样恢复”的**。
+
 ##  扩展练习Challenge 2：
 
 get_pte()函数（位于`kern/mm/pmm.c`）用于在页表中查找或创建页表项，从而实现对指定线性地址对应的物理页的访问和映射操作。这在操作系统中的分页机制下，是实现虚拟内存与物理内存之间映射关系非常重要的内容。我们需要回答如下两个问题：
