@@ -111,7 +111,7 @@ void interrupt_handler(struct trapframe *tf)
         // directly.
         // clear_csr(sip, SIP_STIP);
 
-        /*LAB3 请补充你在lab3中的代码 */
+        /*LAB3 请补充你在lab3中的代码 */ 
         clock_set_next_event();
         if(++ticks % TICK_NUM == 0)
         {
