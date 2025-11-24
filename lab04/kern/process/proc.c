@@ -355,10 +355,10 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     //    5. insert proc_struct into hash_list && proc_list
     hash_proc(proc);                         // 加入 pid  hash 链表
     list_add(&proc_list, &proc->list_link);  // 加入全局进程链表
+    nr_process++;           // 维护进程数量
     //    6. call wakeup_proc to make the new child process RUNNABLE
     wakeup_proc(proc);
     //    7. set ret vaule using child proc's pid
-    nr_process++;           // 维护进程数量
     ret = proc->pid;        // 返回子进程 pid
     
 fork_out:
