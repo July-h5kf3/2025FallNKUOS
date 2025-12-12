@@ -127,6 +127,15 @@ void interrupt_handler(struct trapframe *tf)
         *(2) ticks 计数器自增
         *(3) 每 TICK_NUM 次中断（如 100 次），进行判断当前是否有进程正在运行，如果有则标记该进程需要被重新调度（current->need_resched）
         */
+        clock_set_next_event();
+        if(++ticks % TICK_NUM == 0)
+        {
+            print_ticks();
+            // if(++prints % 10 == 0)
+            // {
+            //    sbi_shutdown();
+            // }
+        }
         break;
     case IRQ_H_TIMER:
         cprintf("Hypervisor software interrupt\n");

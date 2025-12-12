@@ -112,6 +112,20 @@ alloc_proc(void)
          *       uint32_t wait_state;                        // waiting state
          *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
          */
+         proc->state = PROC_UNINIT;
+        proc->pid = -1; //将pid先设置为1，实际上在do_fork函数中分配pid
+        proc->runs = 0;  
+        proc->kstack = 0;  //内核栈指针由于尚未分配设置为0
+        proc->need_resched = 0;
+        proc->parent = NULL;
+        proc->mm = NULL;
+        memset(&(proc->context), 0, sizeof(struct context));
+        proc->tf = NULL;
+        proc->pgdir = boot_pgdir_pa;
+        proc->flags = 0;
+        memset(proc->name, 0, sizeof(proc->name));
+        proc->list_link.prev = proc->list_link.next = NULL;
+        proc->hash_link.prev = proc->hash_link.next = NULL;       
     }
     return proc;
 }
@@ -225,6 +239,15 @@ void proc_run(struct proc_struct *proc)
          *   lsatp():                   Modify the value of satp register
          *   switch_to():              Context switching between two processes
          */
+         bool intr_flag;
+        struct proc_struct *prev = current;
+        local_intr_save(intr_flag);
+        {
+            current = proc;
+            lsatp(proc->pgdir);
+            switch_to(&(prev->context), &(proc->context));
+        }
+        local_intr_restore(intr_flag);
     }
 }
 
@@ -442,6 +465,28 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
      *    update step 1: set child proc's parent to current process, make sure current process's wait_state is 0
      *    update step 5: insert proc_struct into hash_list && proc_list, set the relation links of process
      */
+      if ((proc = alloc_proc()) == NULL) {
+        goto fork_out;
+    }
+    //    2. call setup_kstack to allocate a kernel stack for child process
+    if (setup_kstack(proc) != 0) {
+        goto bad_fork_cleanup_proc;
+    }
+    //    3. call copy_mm to dup OR share mm according clone_flag
+    if (copy_mm(clone_flags, proc) != 0) {
+        goto bad_fork_cleanup_kstack;
+    }
+    proc->pid = get_pid();
+    //    4. call copy_thread to setup tf & context in proc_struct
+    copy_thread(proc, stack, tf);
+    //    5. insert proc_struct into hash_list && proc_list
+    hash_proc(proc);                         // 加入 pid  hash 链表
+    list_add(&proc_list, &proc->list_link);  // 加入全局进程链表
+    nr_process++;           // 维护进程数量
+    //    6. call wakeup_proc to make the new child process RUNNABLE
+    wakeup_proc(proc);
+    //    7. set ret vaule using child proc's pid
+    ret = proc->pid;        // 返回子进程 pid
 
 fork_out:
     return ret;
