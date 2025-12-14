@@ -87,8 +87,9 @@ static void *__slob_get_free_pages(gfp_t gfp, int order)
 
 #define __slob_get_free_page(gfp) __slob_get_free_pages(gfp, 0)
 
-static inline void __slob_free_pages(unsigned long kva, int order)
+static inline void __slob_free_pages(void *kva, int order)
 {
+	// 明确以指针形式传入内核虚拟地址，避免出现整型到指针的隐式转换告警
 	free_pages(kva2page(kva), 1 << order);
 }
 
@@ -281,7 +282,8 @@ void kfree(void *block)
 			{
 				*last = bb->next;
 				spin_unlock_irqrestore(&block_lock, flags);
-				__slob_free_pages((unsigned long)block, bb->order);
+				// 直接将块指针传给 __slob_free_pages，避免再次触发整型到指针的隐式转换告警
+				__slob_free_pages(block, bb->order);
 				slob_free(bb, sizeof(bigblock_t));
 				return;
 			}

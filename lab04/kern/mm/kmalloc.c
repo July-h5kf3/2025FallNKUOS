@@ -89,7 +89,8 @@ static void *__slob_get_free_pages(gfp_t gfp, int order)
 
 static inline void __slob_free_pages(void *kva, int order)
 {
-	free_pages(kva2page(kva), 1 << order);
+	// 明确将内核虚拟地址作为指针传入，避免编译器进行整型推断导致的类型告警
+	free_pages(kva2page((void *)kva), 1 << order);
 }
 
 static void slob_free(void *b, int size);

@@ -112,7 +112,7 @@ alloc_proc(void)
          *       uint32_t wait_state;                        // waiting state
          *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
          */
-         proc->state = PROC_UNINIT;
+        proc->state = PROC_UNINIT;
         proc->pid = -1; //将pid先设置为1，实际上在do_fork函数中分配pid
         proc->runs = 0;  
         proc->kstack = 0;  //内核栈指针由于尚未分配设置为0
@@ -125,7 +125,10 @@ alloc_proc(void)
         proc->flags = 0;
         memset(proc->name, 0, sizeof(proc->name));
         proc->list_link.prev = proc->list_link.next = NULL;
-        proc->hash_link.prev = proc->hash_link.next = NULL;       
+        proc->hash_link.prev = proc->hash_link.next = NULL;
+        // LAB5中新增的等待状态与进程关系指针都需要显式置空，避免沿用未初始化的垃圾值
+        proc->wait_state = 0;
+        proc->cptr = proc->yptr = proc->optr = NULL;
     }
     return proc;
 }
@@ -477,12 +480,14 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
         goto bad_fork_cleanup_kstack;
     }
     proc->pid = get_pid();
+    // 子进程继承父进程指针关系，同时清除父进程等待状态
+    proc->parent = current;
+    current->wait_state = 0;
     //    4. call copy_thread to setup tf & context in proc_struct
     copy_thread(proc, stack, tf);
     //    5. insert proc_struct into hash_list && proc_list
-    hash_proc(proc);                         // 加入 pid  hash 链表
-    list_add(&proc_list, &proc->list_link);  // 加入全局进程链表
-    nr_process++;           // 维护进程数量
+    hash_proc(proc);         // 加入 pid hash 链表
+    set_links(proc);         // 维护父子/兄弟关系以及全局进程链表
     //    6. call wakeup_proc to make the new child process RUNNABLE
     wakeup_proc(proc);
     //    7. set ret vaule using child proc's pid
@@ -722,6 +727,12 @@ load_icode(unsigned char *binary, size_t size)
      *          tf->status should be appropriate for user program (the value of sstatus)
      *          hint: check meaning of SPP, SPIE in SSTATUS, use them by SSTATUS_SPP, SSTATUS_SPIE(defined in risv.h)
      */
+    // Switch back to user mode with the new address space: run from ELF entry
+    // on the fresh user stack so sret returns into user space cleanly.
+    tf->gpr.sp = USTACKTOP;
+    tf->epc = elf->e_entry;
+    tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SIE);
+    tf->status |= SSTATUS_SPIE;
 
     ret = 0;
 out:

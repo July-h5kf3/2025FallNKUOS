@@ -128,9 +128,14 @@ void interrupt_handler(struct trapframe *tf)
         *(3) 每 TICK_NUM 次中断（如 100 次），进行判断当前是否有进程正在运行，如果有则标记该进程需要被重新调度（current->need_resched）
         */
         clock_set_next_event();
-        if(++ticks % TICK_NUM == 0)
+        if ((++ticks % TICK_NUM) == 0)
         {
             print_ticks();
+            // 当到达一个调度周期时，提醒当前进程在返回用户态后需要让出 CPU
+            if (current != NULL)
+            {
+                current->need_resched = 1;
+            }
             // if(++prints % 10 == 0)
             // {
             //    sbi_shutdown();
