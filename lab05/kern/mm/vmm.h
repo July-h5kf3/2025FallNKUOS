@@ -46,6 +46,7 @@ void insert_vma_struct(struct mm_struct *mm, struct vma_struct *vma);
 
 struct mm_struct *mm_create(void);
 void mm_destroy(struct mm_struct *mm);
+int do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr);
 
 void vmm_init(void);
 int mm_map(struct mm_struct *mm, uintptr_t addr, size_t len, uint32_t vm_flags,

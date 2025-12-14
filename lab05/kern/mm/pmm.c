@@ -399,42 +399,46 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
             uint32_t perm = (*ptep & PTE_USER);
             // get page from ptep
             struct Page *page = pte2page(*ptep);
-            // alloc a page for process B
-            struct Page *npage = alloc_page();
             assert(page != NULL);
-            assert(npage != NULL);
-            int ret = 0;
-            /* LAB5:EXERCISE2 YOUR CODE
-             * replicate content of page to npage, build the map of phy addr of
-             * nage with the linear addr start
-             *
-             * Some Useful MACROs and DEFINEs, you can use them in below
-             * implementation.
-             * MACROs or Functions:
-             *    page2kva(struct Page *page): return the kernel vritual addr of
-             * memory which page managed (SEE pmm.h)
-             *    page_insert: build the map of phy addr of an Page with the
-             * linear addr la
-             *    memcpy: typical memory copy function
-             *
-             * (1) find src_kvaddr: the kernel virtual address of page
-             * (2) find dst_kvaddr: the kernel virtual address of npage
-             * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
-             * (4) build the map of phy addr of  nage with the linear addr start
+
+            /*
+             * COW path:
+             *   - share == true  : install the same physical page into child,
+             *                      clear write bit in both parent/child PTEs so
+             *                      that the first write triggers a fault.
+             *   - share == false : fall back to eager copy (original behavior).
              */
-            // (1)(2) 通过物理页描述符换算出内核可访问的虚拟地址
-            void *src_kvaddr = page2kva(page);
-            void *dst_kvaddr = page2kva(npage);
-            // (3) 将父进程对应物理页内容拷贝到子进程新分配的物理页
-            memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
-            // (4) 在子进程页表中建立从start虚拟地址到新物理页的映射
-            ret = page_insert(to, npage, start, perm);
-            if (ret != 0)
+            if (share)
             {
-                free_page(npage);
-                return ret;
+                // child mapping: no write bit so store will fault and trigger COW
+                uint32_t cow_perm = perm & ~PTE_W;
+                int ret = page_insert(to, page, start, cow_perm);
+                if (ret != 0)
+                {
+                    return ret;
+                }
+                // parent mapping also needs write cleared to participate in COW
+                *ptep = (*ptep & ~PTE_W);
+                tlb_invalidate(from, start);
             }
-            assert(ret == 0);
+            else
+            {
+                // alloc a page for process B
+                struct Page *npage = alloc_page();
+                assert(npage != NULL);
+                // (1)(2) translate physical page to kernel virtual address
+                void *src_kvaddr = page2kva(page);
+                void *dst_kvaddr = page2kva(npage);
+                // (3) copy parent's page content to child's new page
+                memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+                // (4) map child's virtual address to the new physical page
+                int ret = page_insert(to, npage, start, perm);
+                if (ret != 0)
+                {
+                    free_page(npage);
+                    return ret;
+                }
+            }
         }
         start += PGSIZE;
     } while (start != 0 && start < end);

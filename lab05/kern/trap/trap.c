@@ -218,14 +218,26 @@ void exception_handler(struct trapframe *tf)
         cprintf("Environment call from M-mode\n");
         break;
     case CAUSE_FETCH_PAGE_FAULT:
-        cprintf("Instruction page fault\n");
-        break;
     case CAUSE_LOAD_PAGE_FAULT:
-        cprintf("Load page fault\n");
+    case CAUSE_STORE_PAGE_FAULT: {
+        // User page faults: try COW handler first, otherwise kill the process.
+        int ret = -E_INVAL;
+        if (current != NULL && current->mm != NULL)
+        {
+            ret = do_pgfault(current->mm, tf->cause, tf->tval);
+        }
+        if (ret != 0)
+        {
+            cprintf("unhandled page fault @0x%08x, cause %ld, ret %d\n", tf->tval, tf->cause, ret);
+            if (trap_in_kernel(tf))
+            {
+                print_trapframe(tf);
+                panic("kernel page fault.\n");
+            }
+            do_exit(ret);
+        }
         break;
-    case CAUSE_STORE_PAGE_FAULT:
-        cprintf("Store/AMO page fault\n");
-        break;
+    }
     default:
         print_trapframe(tf);
         break;

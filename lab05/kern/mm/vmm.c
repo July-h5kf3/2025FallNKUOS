@@ -8,6 +8,9 @@
 #include <riscv.h>
 #include <kmalloc.h>
 
+volatile unsigned int pgfault_num = 0;
+struct mm_struct *check_mm_struct = NULL;
+
 /*
   vmm design include two parts: mm_struct (mm) & vma_struct (vma)
   mm is the memory manager for the set of continuous virtual memory
@@ -167,6 +170,63 @@ void mm_destroy(struct mm_struct *mm)
     mm = NULL;
 }
 
+int do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr)
+{
+    // COW handler: resolve write faults by duplicating shared pages lazily.
+    pgfault_num++;
+    addr = ROUNDDOWN(addr, PGSIZE);
+
+    struct vma_struct *vma = find_vma(mm, addr);
+    if (vma == NULL || vma->vm_start > addr)
+    {
+        return -E_INVAL;
+    }
+
+    // Only handle user write faults here; other faults fall through to trap.
+    if (error_code != CAUSE_STORE_PAGE_FAULT || !(vma->vm_flags & VM_WRITE))
+    {
+        return -E_INVAL;
+    }
+
+    pte_t *ptep = get_pte(mm->pgdir, addr, 0);
+    if (ptep == NULL || !(*ptep & PTE_V))
+    {
+        return -E_INVAL;
+    }
+    if (*ptep & PTE_W)
+    {
+        // Already writable, nothing to fix.
+        return 0;
+    }
+
+    struct Page *page = pte2page(*ptep);
+    uint32_t perm = (*ptep & PTE_USER);
+
+    if (page_ref(page) > 1)
+    {
+        // Shared page: allocate a private copy for the faulting process.
+        struct Page *npage = alloc_page();
+        if (npage == NULL)
+        {
+            return -E_NO_MEM;
+        }
+        memcpy(page2kva(npage), page2kva(page), PGSIZE);
+        int ret = page_insert(mm->pgdir, npage, addr, perm | PTE_W);
+        if (ret != 0)
+        {
+            free_page(npage);
+            return ret;
+        }
+    }
+    else
+    {
+        // Exclusive owner: simply restore the write bit.
+        *ptep = pte_create(page2ppn(page), perm | PTE_W);
+        tlb_invalidate(mm->pgdir, addr);
+    }
+    return 0;
+}
+
 int mm_map(struct mm_struct *mm, uintptr_t addr, size_t len, uint32_t vm_flags,
            struct vma_struct **vma_store)
 {
@@ -218,7 +278,8 @@ int dup_mmap(struct mm_struct *to, struct mm_struct *from)
 
         insert_vma_struct(to, nvma);
 
-        bool share = 0;
+        // enable sharing so fork uses COW instead of eager copy
+        bool share = 1;
         if (copy_range(to->pgdir, from->pgdir, vma->vm_start, vma->vm_end, share) != 0)
         {
             return -E_NO_MEM;
