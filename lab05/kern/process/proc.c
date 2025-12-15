@@ -517,6 +517,7 @@ int do_exit(int error_code)
     {
         panic("initproc exit.\n");
     }
+    //随后回收用户进程的地址空间
     struct mm_struct *mm = current->mm;
     if (mm != NULL)
     {
@@ -529,17 +530,22 @@ int do_exit(int error_code)
         }
         current->mm = NULL;
     }
+    //回收完相关资源后，将当前进程(也就是正在系统调用的这个进程)的状态设置为僵尸态
+    //并且将exit_code设置为内核sys_exit函数传入的参数error_code
     current->state = PROC_ZOMBIE;
     current->exit_code = error_code;
     bool intr_flag;
     struct proc_struct *proc;
     local_intr_save(intr_flag);
     {
+        //唤醒父进程，通知其有子进程退出需要回收
         proc = current->parent;
         if (proc->wait_state == WT_CHILD)
         {
             wakeup_proc(proc);
         }
+        //此时由于当前进程会退出(因为当前进程即为执行sys_exit系统调用的进程)，
+        //所以需要将当前进程的所有子进程都重新分配给init进程
         while (current->cptr != NULL)
         {
             proc = current->cptr;
@@ -562,6 +568,7 @@ int do_exit(int error_code)
         }
     }
     local_intr_restore(intr_flag);
+    //当前进程已经时僵尸进程了，主动调用调度器让出CPU
     schedule();
     panic("do_exit will not return!! %d.\n", current->pid);
 }
