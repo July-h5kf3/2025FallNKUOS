@@ -154,3 +154,232 @@ lab05 的 user 程序在内核启动阶段由 `load_icode` 预加载：`kernel_m
 常见桌面 OS（Linux/Windows）通常在 execve 时“按需加载”：只建立 VMA/页表，真正的代码数据由分页异常触发、在访问时 lazy load，并且文件内容来自磁盘文件系统。
 
 之所以不同，是因为 ucore 环境没有完整的文件系统和页缓存；用户程序以二进制数组链接进内核镜像（或直接放在内存中），因此只能在内核里一次性拷贝到内存。
+
+## 分支练习
+## lab5分支练习
+由于本次分支实验同样使用双重GDB调试策略，我们同样要建立三个终端，分别为：
+
+- 终端1：使用make debug指令
+
+- 终端2：附加调试QEMU进程，启动GDB附加到QEMU进程上
+
+  首先使用指令`pgrep -f qemu-system-riscv64 `获取QEMU进程的PID，随后启动GDB，在会话中使用`attach <pid>`将其附加在QEMU进程上，由于我们希望会话收到信号后，不暂停程序执行且不打印信号接收信息，所以我们使用这个指令来完成这个操作：`handle SIGPIPE nostop noprint`。随后按c启动执行
+
+- 终端3：这个终端用于调试操作系统内核和运行的用户程序
+
+![image-20251215135821753](fig/01.png)
+
+由于当前makefile下的make gdb指令只包含kernel下的调试信息，而我们现在想要观测的是user下的syscall函数，于是我们挑选了一个用户程序exit.c进行调试，该用户程序中使用了exit(magic)这个系统调用，其中magic为-66436。
+
+我们先来分析一下用户程序执行exit函数后的具体逻辑：首先，exit函数属于用户ulib库中的函数，属于sys_exit函数的封装，而sys_exit函数实际上则是用户syscall函数的封装，所以说当我们执行exit(magic)时，实际上进行了一次系统调用：`syscall(SYS_exit, magic)`。为了让本来只可以读取kernel调试信息的gdb可以看到user的调试信息，我们先将包含exit.c的符号表和调试信息的ELF文件__user_exit.out载入gdb符号表，然后就可以在user下的sys_exit函数处设置断点了。
+
+如下图所示：程序停在sys_exit函数处，此时参数error_code为-66436，即exit.c文件中的magic：
+
+![image-20251215140511205](fig/02.png)
+
+随后我们进行如下调试：现在用户syscall函数处设置断点，让程序继续运行，然后查看此时的汇编代码。此时可以看到syscall函数的第一个参数(也就是syscall编码为1，恰好为sys_exit的系统调用编码)。然后在syscall函数内联汇编代码部分之前设置断点，可以看到第二段汇编代码正好是用户syscall函数的内联汇编代码，我们着重观测的就是ecall的调用。
+
+```bash
+(gdb) break user/libs/syscall.c:syscall
+Breakpoint 2 at 0x8000d4: file user/libs/syscall.c, line 15.
+(gdb) c
+Continuing.
+
+Breakpoint 2, syscall (num=num@entry=1)
+    at user/libs/syscall.c:15
+15              a[i] = va_arg(ap, uint64_t);
+(gdb) x/10i $pc
+=> 0x8000d4 <syscall>:  addi    sp,sp,-144
+   0x8000d6 <syscall+2>:        addi    t1,sp,128
+   0x8000da <syscall+6>:        sd      a0,8(sp)
+   0x8000dc <syscall+8>:        sd      a1,88(sp)
+   0x8000de <syscall+10>:       sd      a1,40(sp)
+   0x8000e0 <syscall+12>:       sd      a2,96(sp)
+   0x8000e2 <syscall+14>:       sd      a2,48(sp)
+   0x8000e4 <syscall+16>:       sd      a3,104(sp)
+   0x8000e6 <syscall+18>:       sd      a3,56(sp)
+   0x8000e8 <syscall+20>:       sd      a4,112(sp)
+(gdb) break user/libs/syscall.c:18
+Breakpoint 3 at 0x8000f0: file user/libs/syscall.c, line 19.
+(gdb) c
+Continuing.
+
+Breakpoint 3, syscall (num=num@entry=1)
+    at user/libs/syscall.c:19
+19          asm volatile (
+(gdb) x/10i $pc
+=> 0x8000f0 <syscall+28>:       sd      a6,128(sp)
+   0x8000f2 <syscall+30>:       sd      a7,136(sp)
+   0x8000f4 <syscall+32>:       sd      t1,32(sp)
+   0x8000f6 <syscall+34>:       ld      a0,8(sp)
+   0x8000f8 <syscall+36>:       ld      a1,40(sp)
+   0x8000fa <syscall+38>:       ld      a2,48(sp)
+   0x8000fc <syscall+40>:       ld      a3,56(sp)
+   0x8000fe <syscall+42>:       ld      a4,64(sp)
+   0x800100 <syscall+44>:       ld      a5,72(sp)
+   0x800102 <syscall+46>:       ecall
+```
+
+当执行ecall指令时，QEMU会向其模拟的CPU输送trap信息，然后从stvec中获取异常处理的入口，也就是__alltraps，其会构造一个trap_frame结构体，会记录用户syscall传入的参数信息和系统调用编号，以及该进程的部分寄存器数据和CSR寄存器数据，为了观察这个trapframe，我们先在\_\_alltraps处设置断点，终端有如下输出：
+
+![image-20251215142916920](fig/03.png)
+
+随后在trap函数中设置断点，观察trapframe结构：可以看到cause为8，说明此时发生的是用户态的系统调用；a0为1，说明该系统调用为sys_exit型系统调用。
+
+![image-20251215143315760](fig/04.png)
+
+由于trap函数的代码如下，而此时current不为空，所以会进入else语句块中，执行函数trap_dispatch，由于此时的cause>0，于是会进入exception_handler。
+
+```c
+void trap(struct trapframe *tf){
+    if (current == NULL)
+    {
+        trap_dispatch(tf);
+    }
+    else
+    {
+        struct trapframe *otf = current->tf;
+        current->tf = tf;
+
+        bool in_kernel = trap_in_kernel(tf);
+
+        trap_dispatch(tf);
+
+        current->tf = otf;
+        if (!in_kernel)
+        {
+            if (current->flags & PF_EXITING)
+            {
+                do_exit(-E_KILLED);
+            }
+            if (current->need_resched)
+            {
+                schedule();
+            }
+        }
+    }
+}
+```
+
+而由于此时的cause为8，会进入这一条case中，此时的syscall函数为内核下的syscall函数
+
+```c
+    case CAUSE_USER_ECALL:
+        // cprintf("Environment call from U-mode\n");
+        tf->epc += 4;
+        syscall();
+        break;
+```
+
+于是我们进行如下设置，一路执行到内核syscall函数的开头：
+
+![image-20251215143652015](fig/05.png)
+
+由于内核syscall函数的代码如下：
+
+```c
+void
+syscall(void) {
+    struct trapframe *tf = current->tf;
+    uint64_t arg[5];
+    int num = tf->gpr.a0;
+    if (num >= 0 && num < NUM_SYSCALLS) {
+        if (syscalls[num] != NULL) {
+            arg[0] = tf->gpr.a1;
+            arg[1] = tf->gpr.a2;
+            arg[2] = tf->gpr.a3;
+            arg[3] = tf->gpr.a4;
+            arg[4] = tf->gpr.a5;
+            tf->gpr.a0 = syscalls[num](arg);
+            return ;
+        }
+    }
+    print_trapframe(tf);
+    panic("undefined syscall %d, pid = %d, name = %s.\n",
+            num, current->pid, current->name);
+}
+```
+
+此时`current->tf`在trap函数体内就被设置为了发生系统调用的trapframe，当然我们可以再在GDB中检查一下，此时`tf->gpr.a0`等于1，说明发生属于sys_exit(内核)系统调用，会进入到sys_exit函数继续执行。另外，由于在exception_handler中进行了epc的加四处理(跳过发生syscall的指令)，相比于之前的tf.epc增加四，从8388866 >> 8388870：
+
+![image-20251215144107209](fig/06.png)
+
+随后在sys_exit(内核)处设置断点，进入sys_exit函数，其为do_exit函数的封装。
+
+![image-20251215145339692](fig/07.png)
+
+于是我们进入到最后一步，观察do_fork函数。由于sys_exit的系统调用会退出进程(将进程的状态变为僵尸状态)，然后主动调用调度器进行进程切换以让出CPU，所以并不存在使用sret返回用户态：
+
+```c
+int do_exit(int error_code)
+{
+    if (current == idleproc)
+    {
+        panic("idleproc exit.\n");
+    }
+    if (current == initproc)
+    {
+        panic("initproc exit.\n");
+    }
+    //随后回收用户进程的地址空间
+    struct mm_struct *mm = current->mm;
+    if (mm != NULL)
+    {
+        lsatp(boot_pgdir_pa);
+        if (mm_count_dec(mm) == 0)
+        {
+            exit_mmap(mm);
+            put_pgdir(mm);
+            mm_destroy(mm);
+        }
+        current->mm = NULL;
+    }
+    //回收完相关资源后，将当前进程(也就是正在系统调用的这个进程)的状态设置为僵尸态
+    //并且将exit_code设置为内核sys_exit函数传入的参数error_code
+    current->state = PROC_ZOMBIE;
+    current->exit_code = error_code;
+    bool intr_flag;
+    struct proc_struct *proc;
+    local_intr_save(intr_flag);
+    {
+        //唤醒父进程，通知其有子进程退出需要回收
+        proc = current->parent;
+        if (proc->wait_state == WT_CHILD)
+        {
+            wakeup_proc(proc);
+        }
+        //此时由于当前进程会退出(因为当前进程即为执行sys_exit系统调用的进程)，
+        //所以需要将当前进程的所有子进程都重新分配给init进程
+        while (current->cptr != NULL)
+        {
+            proc = current->cptr;
+            current->cptr = proc->optr;
+
+            proc->yptr = NULL;
+            if ((proc->optr = initproc->cptr) != NULL)
+            {
+                initproc->cptr->yptr = proc;
+            }
+            proc->parent = initproc;
+            initproc->cptr = proc;
+            if (proc->state == PROC_ZOMBIE)
+            {
+                if (initproc->wait_state == WT_CHILD)
+                {
+                    wakeup_proc(initproc);
+                }
+            }
+        }
+    }
+    local_intr_restore(intr_flag);
+    //当前进程已经时僵尸进程了，主动调用调度器让出CPU
+    schedule();
+    panic("do_exit will not return!! %d.\n", current->pid);
+}
+```
+
+
+
+由于发生exit类型的系统调用并不会sret，所以当我们再次运行的时候，会进入下一轮的Trap处理：此时的trapframe中数据已经修改，a0变为0
+
+![image-20251215152711691](fig/08.png)
