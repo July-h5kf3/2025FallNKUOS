@@ -59,9 +59,9 @@ do_execve函数调用load_icode（位于kern/process/proc.c中）来加载并解
 
 考虑到：完成Challenge并回答了助教问题的小组可获得本次实验的加分，我们可以都做一下
 
-- [ ] 冯：分支任务 lab2
-- [ ] 袁：分支任务 lab5
-- [ ] 刘：else
+- [x] 冯：分支任务 lab2
+- [x] 袁：分支任务 lab5
+- [x] 刘：else
 
 
 

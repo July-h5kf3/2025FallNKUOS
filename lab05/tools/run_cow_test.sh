@@ -14,7 +14,15 @@ echo "[2/3] Building kernel with TEST=cowtest..."
 make build-cowtest >/dev/null
 
 echo "[3/3] Booting cowtest under QEMU (timeout 20s)..."
-QEMU_BIN="${QEMU:-qemu-system-riscv64}"
+# Prefer the same QEMU binary as Makefile; fall back to PATH if not found.
+DEFAULT_QEMU="/root/qemu-4.1.1/riscv64-softmmu/qemu-system-riscv64"
+if [ -n "${QEMU:-}" ]; then
+    QEMU_BIN="${QEMU}"
+elif [ -x "${DEFAULT_QEMU}" ]; then
+    QEMU_BIN="${DEFAULT_QEMU}"
+else
+    QEMU_BIN="qemu-system-riscv64"
+fi
 if ! timeout 20s "${QEMU_BIN}" \
     -machine virt \
     -nographic \
