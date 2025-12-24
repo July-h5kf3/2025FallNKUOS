@@ -14,6 +14,90 @@
 - 进程调度流程：绘制一个完整的进程调度流程图，包括：时钟中断触发、proc_tick 被调用、schedule() 函数执行、调度类各个函数的调用顺序。并解释 need_resched 标志位在调度过程中的作用
 - 调度算法的切换机制：分析如果要添加一个新的调度算法（如stride），需要修改哪些代码？并解释为什么当前的设计使得切换调度算法变得容易。
 
+#### 调度类结构体 sched_class 的分析
+
+`sched_class` 将具体算法的关键动作抽象为函数指针，框架只关心这些动作的语义：
+
+- `init(struct run_queue *rq)`：初始化运行队列，设置队列结构及计数器。调用时机：`sched_init()` 中在设置 `rq->max_time_slice` 后调用。
+- `enqueue(struct run_queue *rq, struct proc_struct *proc)`：将可运行进程加入运行队列，并初始化时间片等字段。调用时机：`wakeup_proc()` 里唤醒非当前进程时入队；`schedule()` 里当前进程仍可运行时再入队。
+- `dequeue(struct run_queue *rq, struct proc_struct *proc)`：将进程从运行队列移除。调用时机：`schedule()` 选中下一个进程后出队。
+- `pick_next(struct run_queue *rq)`：选择下一个要运行的进程（算法核心）。调用时机：`schedule()` 中。
+- `proc_tick(struct run_queue *rq, struct proc_struct *proc)`：处理时钟中断中的时间片或调度相关逻辑。调用时机：时钟中断中通过 `sched_class_proc_tick()` 调用。
+
+为什么用函数指针而不是直接实现：框架需要在不改动核心调度逻辑（`sched.c`、`trap.c`）的前提下切换算法；函数指针让不同调度算法以“模块”的形式插拔，核心仅依赖统一接口，从而实现解耦、复用和可扩展。
+
+#### 运行队列结构体 run_queue 的分析
+
+lab5 中没有显式 `run_queue`，调度器直接遍历全局 `proc_list` 选择 `PROC_RUNNABLE` 进程（`lab05/kern/schedule/sched.c`），逻辑固定且无法复用其他数据结构。
+
+lab6 引入 `run_queue`（`lab6/kern/schedule/sched.h`），包含：
+
+- `run_list`：链表队列，适合 RR 等顺序队列调度；
+- `lab6_run_pool`：斜堆（skew heap）优先队列，适合 stride 等按“最小步长”选取；
+- `proc_num`、`max_time_slice`：通用元数据。
+
+因此 lab6 需要支持“链表 + 斜堆”两种结构：同一套框架要同时兼容 RR（链表）和 stride（优先队列）等不同策略，避免在核心调度代码中写死数据结构。
+
+#### 调度器框架函数分析（sched_init / wakeup_proc / schedule）
+
+- `sched_init()`（`lab6/kern/schedule/sched.c`）：
+  - 选择调度类：`sched_class = &default_sched_class`；
+  - 初始化运行队列：`rq->max_time_slice = MAX_TIME_SLICE; sched_class->init(rq);`；
+  - 打印调度器名称。  
+  与 lab5 的固定逻辑相比，lab6 通过 `sched_class` 将初始化细节交给具体算法，框架只做“选择+调用”。
+
+- `wakeup_proc()`：
+  - lab5 仅改变状态为 `RUNNABLE`；
+  - lab6 在唤醒非当前进程时调用 `sched_class_enqueue(proc)` 入队。  
+  这样不同算法由各自 `enqueue` 决定入队结构与策略。
+
+- `schedule()`：
+  - lab5 遍历 `proc_list` 找下一个 `RUNNABLE`；
+  - lab6 使用 `enqueue/pick_next/dequeue` 组合完成入队、选取、出队。  
+  这一层彻底抽象了“怎么挑进程”的细节，实现与具体算法解耦。
+
+#### 调度类的初始化流程
+
+1. `kern_init()` 中依次初始化内核子系统（`lab6/kern/init/init.c`）。
+2. 在 `vmm_init()` 之后调用 `sched_init()`。
+3. `sched_init()` 设置 `sched_class = &default_sched_class`，配置 `rq->max_time_slice`，并调用 `sched_class->init(rq)`。
+4. `default_sched_class` 在 `lab6/kern/schedule/default_sched.c` 定义，将 RR 相关函数挂接到框架。  
+这样 `default_sched_class` 成为调度框架的“实现体”，框架通过函数指针调用具体算法。
+
+#### 进程调度流程（含 need_resched 作用）
+
+```text
+时钟中断
+  -> trap_dispatch()
+     -> 时钟中断处理:
+        clock_set_next_event()
+        ticks++ ...
+        sched_class_proc_tick(current)
+           -> sched_class->proc_tick(rq, current)
+           -> (idleproc 时直接 need_resched=1)
+  -> trap() 返回用户态前检查
+     if (current->need_resched)
+        schedule()
+           -> current->need_resched = 0
+           -> if current RUNNABLE: sched_class->enqueue(rq, current)
+           -> next = sched_class->pick_next(rq)
+           -> if next != NULL: sched_class->dequeue(rq, next)
+           -> if next == NULL: next = idleproc
+           -> proc_run(next)
+```
+
+`need_resched` 是“延迟调度”的标志：时钟中断或 `do_yield()` 将其置位，返回用户态前统一触发 `schedule()`，避免在中断或内核态随意切换导致状态不一致。
+
+#### 调度算法的切换机制
+
+要新增 stride 调度（或其他算法），通常需要：
+
+1. 新增一个实现文件，定义 `struct sched_class`，实现 `init/enqueue/dequeue/pick_next/proc_tick`（如 `default_sched_stride.c`）。
+2. 在 `sched_init()` 中将 `sched_class` 指向新算法（或通过宏/配置选择）。
+3. 确保构建系统编译链接新的调度器文件。
+
+由于核心调度逻辑仅依赖 `sched_class` 接口，切换算法无需修改 `schedule()`、`wakeup_proc()`、`trap.c` 等代码，耦合度低，扩展成本小。
+
 
 
 
