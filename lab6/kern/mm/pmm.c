@@ -417,22 +417,22 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
              * memory which page managed (SEE pmm.h)
              *    page_insert: build the map of phy addr of an Page with the
              * linear addr la
-             *    memcpy: typical memory copy function
+            *    memcpy: typical memory copy function
              *
              * (1) find src_kvaddr: the kernel virtual address of page
              * (2) find dst_kvaddr: the kernel virtual address of npage
              * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
              * (4) build the map of phy addr of  nage with the linear addr start
              */
-            uint32_t cow_perm = perm & ~PTE_W;
-            ret = page_insert(to, page, start, cow_perm);
+            void *src_kvaddr = page2kva(page);
+            void *dst_kvaddr = page2kva(npage);
+            memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+            ret = page_insert(to, npage, start, perm);
             if (ret != 0)
             {
                 return ret;
             }
             assert(ret == 0);
-            *ptep = (*ptep & ~PTE_W);
-            tlb_invalidate(from, start);
         }
         start += PGSIZE;
     } while (start != 0 && start < end);

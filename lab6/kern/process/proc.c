@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sync.h>
 #include <pmm.h>
+#include <riscv.h>
 #include <error.h>
 #include <sched.h>
 #include <elf.h>
@@ -137,6 +138,12 @@ alloc_proc(void)
          *       uint32_t lab6_stride;                       // stride value (lab6 stride)
          *       uint32_t lab6_priority;                     // priority value (lab6 stride)
          */
+        proc->rq = NULL;
+        list_init(&(proc->run_link));
+        proc->time_slice = 0;
+        proc->lab6_run_pool.parent = proc->lab6_run_pool.left = proc->lab6_run_pool.right = NULL;
+        proc->lab6_stride = 0;
+        proc->lab6_priority = 0;
     }
     return proc;
 }
@@ -256,6 +263,7 @@ void proc_run(struct proc_struct *proc)
         {
             current = proc;
             lsatp(proc->pgdir);
+            write_csr(sscratch, proc->kstack + KSTACKSIZE);
             switch_to(&(prev->context), &(proc->context));
         }
         local_intr_restore(intr_flag);
@@ -713,6 +721,8 @@ load_icode(unsigned char *binary, size_t size)
     assert(pgdir_alloc_page(mm->pgdir, USTACKTOP - 2 * PGSIZE, PTE_USER) != NULL);
     assert(pgdir_alloc_page(mm->pgdir, USTACKTOP - 3 * PGSIZE, PTE_USER) != NULL);
     assert(pgdir_alloc_page(mm->pgdir, USTACKTOP - 4 * PGSIZE, PTE_USER) != NULL);
+    // 确认栈页具有写权限
+    assert(*get_pte(mm->pgdir, USTACKTOP - PGSIZE, 0) & PTE_W);
 
     //(5) set current process's mm, sr3, and set CR3 reg = physical addr of Page Directory
     mm_count_inc(mm);
@@ -738,6 +748,7 @@ load_icode(unsigned char *binary, size_t size)
     tf->epc = elf->e_entry;
     tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SIE);
     tf->status |= SSTATUS_SPIE;
+    tf->status |= SSTATUS_SUM;
     ret = 0;
 out:
     return ret;
@@ -907,6 +918,7 @@ kernel_execve(const char *name, unsigned char *binary, size_t size)
     memcpy(new_tf, old_tf, sizeof(struct trapframe));
     current->tf = new_tf;
     ret = do_execve(name, len, binary, size);
+    write_csr(sscratch, current->kstack + KSTACKSIZE);
     asm volatile(
         "mv sp, %0\n"
         "j __trapret\n"

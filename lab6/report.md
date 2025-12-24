@@ -121,3 +121,35 @@ lab6 引入 `run_queue`（`lab6/kern/schedule/sched.h`），包含：
 - 展示 make grade 的输出结果，并描述在 QEMU 中观察到的调度现象。
 - 分析 Round Robin 调度算法的优缺点，讨论如何调整时间片大小来优化系统性能，并解释为什么需要在 RR_proc_tick 中设置 need_resched 标志。
 拓展思考：如果要实现优先级 RR 调度，你的代码需要如何修改？当前的实现是否支持多核调度？如果不支持，需要如何改进？
+
+#### 我的实现与对比
+
+- sched.c 差异：lab6 的 `schedule()` 通过调度类接口抽象（enqueue/pick/dequeue/proc_tick），而 lab5 写死了链表操作。否则无法在同一核心框架下切换 RR/stride 等策略，且易造成重复代码。
+- 函数实现要点（lab6/kern/schedule/default_sched.c）：
+  - `RR_init`：初始化 `run_list`（空循环链表）、`proc_num=0`，并清空 `lab6_run_pool`。
+  - `RR_enqueue`：若 `run_link` 已在队列会断言；时间片未设置或溢出则重置为 `rq->max_time_slice`，插入队尾（`list_add_before(run_list, run_link)`），更新 `rq` 指针与计数。
+  - `RR_dequeue`：断言节点有效，`list_del_init` 解绑，并递减 `proc_num`。
+  - `RR_pick_next`：若队列空返回 NULL，否则取队头 `list_next(&run_list)` 并用 `le2proc` 还原 proc。
+  - `RR_proc_tick`：时间片递减，耗尽时置 `need_resched=1` 触发延迟调度。
+
+#### 设计与边界处理
+
+- 链表选择：RR 需 FIFO 语义，直接用 `run_list` 双向循环链表；入队尾（before head）保证轮转顺序，出队/取队头用 `list_next`。
+- 时间片：入队时统一规范为 `max_time_slice`，避免无穷时间片或旧值过大；tick 中只针对非 idle 的进程递减（idle 在 sched_class_proc_tick 中直接置 resched），耗尽后标记换出，不在中断内切换保证原子性。
+- 空队列兜底：`pick_next` 返回 NULL 时调度器回退 idleproc；`dequeue` 断言确保不会删除未入队节点。
+
+#### 运行结果与现象
+
+- `make grade`：通过，得分 50/50。关键输出包含 `all user-mode processes have quit.` 与 `init check memory pass.`。
+- QEMU 观察：priority 测例中 5 个子进程轮转递增计数，最终 `sched result` 近似均衡（1 1 1 1 1），符合 RR 时间片均分。
+
+#### RR 优缺点与时间片
+
+- 优点：公平、实现简单、响应时间可控；缺点：无优先级，频繁切换带来开销，CPU 绑定任务可能导致 cache 抖动。
+- 时间片太大→响应差、可能饿死短任务；太小→切换开销占比高。通常取“上下文切换开销/典型计算量”的折中（本实验默认 5 tick）。
+- `RR_proc_tick` 置 `need_resched` 是为了在中断返回用户态前统一触发 `schedule()`，保持调度点单一、避免在中断上下文直接切换造成状态复杂。
+
+#### 拓展思考
+
+- 优先级 RR：可在队列中维护多级队列或在入队时按优先级插入/多队列轮询；同时动态调整时间片（如优先级高→更大时间片或更高队列频率）。
+- 多核支持：当前 run_queue 为单核全局，且无锁保护；需为每核维护 rq，加锁或使用 per-CPU 屏蔽中断保护，增加负载均衡/窃取逻辑，调度类接口扩展 load_balance/get_proc 等。
