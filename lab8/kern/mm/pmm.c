@@ -208,7 +208,7 @@ switch_kernel_memorylayout()
      *  set up kernel stack guardian pages
      */
     extern char bootstackguard[], boot_page_table_sv39[];
-    if ((bootstackguard + PGSIZE == bootstack) && (bootstacktop == boot_page_table_sv39))
+    if ((bootstackguard + PGSIZE == bootstack) && (&bootstacktop[0] == &boot_page_table_sv39[0]))
     {
         // check writeable and set 0
         memset(boot_page_table_sv39, 0, PGSIZE);
@@ -216,8 +216,8 @@ switch_kernel_memorylayout()
         bootstack[-PGSIZE] = 0;
 
         // set pages beneath and above the kernel stack as guardians
-        boot_map_segment(boot_pgdir_va, bootstackguard, PGSIZE, PADDR(bootstackguard), 0);
-        boot_map_segment(boot_pgdir_va, boot_page_table_sv39, PGSIZE, PADDR(boot_page_table_sv39), 0);
+        boot_map_segment(boot_pgdir_va, (uintptr_t)bootstackguard, PGSIZE, PADDR(bootstackguard), 0);
+        boot_map_segment(boot_pgdir_va, (uintptr_t)boot_page_table_sv39, PGSIZE, PADDR(boot_page_table_sv39), 0);
         flush_tlb();
 
         // the following four statements should all crash
@@ -480,7 +480,14 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
              * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
              * (4) build the map of phy addr of  nage with the linear addr start
              */
-            
+            void *src_kvaddr = page2kva(page);
+            void *dst_kvaddr = page2kva(npage);
+            memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+            ret = page_insert(to, npage, start, perm);
+            if (ret != 0)
+            {
+                return ret;
+            }
             assert(ret == 0);
         }
         start += PGSIZE;

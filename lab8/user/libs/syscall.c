@@ -51,7 +51,7 @@ sys_fork(void) {
 }
 
 int
-sys_wait(int64_t pid, int64_t *store) {
+sys_wait(int64_t pid, int *store) {
     return syscall(SYS_wait, pid, store);
 }
 

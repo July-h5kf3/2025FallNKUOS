@@ -26,6 +26,6 @@ struct device {
 
 void dev_init(void);
 struct inode *dev_create_inode(void);
+void dev_stdin_write(char c);
 
 #endif /* !__KERN_FS_DEVS_DEV_H__ */
-
