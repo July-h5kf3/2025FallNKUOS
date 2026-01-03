@@ -152,8 +152,10 @@ alloc_proc(void)
         proc->lab6_run_pool.left = proc->lab6_run_pool.right = proc->lab6_run_pool.parent = NULL;
         proc->lab6_stride = 0;
         proc->lab6_priority = 0;
-
-        
+        list_init(&(proc->list_link));
+        list_init(&(proc->hash_link));
+        proc->exit_code = 0;
+        proc->filesp = NULL;
     }
     return proc;
 }
@@ -553,6 +555,10 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     if (copy_mm(clone_flags, proc) != 0) {
         goto bad_fork_cleanup_kstack;
     }
+    if (copy_files(clone_flags, proc) != 0)
+    { // for LAB8
+        goto bad_fork_cleanup_mm;
+    }
     proc->pid = get_pid();
     // 子进程继承父进程指针关系，同时清除父进程等待状态
     proc->parent = current;
@@ -573,17 +579,15 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
      *    update step 1: set child proc's parent to current process, make sure current process's wait_state is 0
      *    update step 5: insert proc_struct into hash_list && proc_list, set the relation links of process
      */
-    
-    if (copy_files(clone_flags, proc) != 0)
-    { // for LAB8
-        goto bad_fork_cleanup_kstack;
-    }
-    
 fork_out:
     return ret;
 
-bad_fork_cleanup_fs: // for LAB8
-    put_files(proc);
+bad_fork_cleanup_mm:
+    if (proc->mm != NULL && mm_count_dec(proc->mm) == 0) {
+        exit_mmap(proc->mm);
+        put_pgdir(proc->mm);
+        mm_destroy(proc->mm);
+    }
 bad_fork_cleanup_kstack:
     put_kstack(proc);
 bad_fork_cleanup_proc:
@@ -708,6 +712,10 @@ load_icode(int fd, int argc, char **kargv)
 
     int ret = -E_NO_MEM;
     struct mm_struct *mm;
+    struct Page *page = NULL;
+    struct proghdr *phdrs = NULL;
+    uintptr_t *uargv = NULL;
+    uintptr_t stacktop = USTACKTOP;
     //(1) create a new mm for current process
     if ((mm = mm_create()) == NULL)
     {
@@ -719,7 +727,6 @@ load_icode(int fd, int argc, char **kargv)
         goto bad_pgdir_cleanup_mm;
     }
     //(3) copy TEXT/DATA section, build BSS parts in binary to memory space of process
-    struct Page *page;
     //(3.1) get the file header of the bianry program (ELF format)
     struct elfhdr elf;
     if ((ret = load_icode_read(fd, &elf, sizeof(elf), 0)) != 0)
@@ -727,7 +734,6 @@ load_icode(int fd, int argc, char **kargv)
         goto bad_elf_cleanup_pgdir;
     }
     //(3.2) get the entry of the program section headers of the bianry program (ELF format)
-    struct proghdr *phdrs = NULL;
     if ((phdrs = kmalloc(sizeof(struct proghdr) * elf.e_phnum)) == NULL)
     {
         ret = -E_NO_MEM;
@@ -864,21 +870,47 @@ load_icode(int fd, int argc, char **kargv)
     current->pgdir = PADDR(mm->pgdir);
     lsatp(PADDR(mm->pgdir));
 
+    /* copy argv strings to the new user stack */
+    if (argc > 0)
+    {
+        ret = -E_NO_MEM;
+        uargv = kmalloc(sizeof(uintptr_t) * (argc + 1));
+        if (uargv == NULL)
+        {
+            goto bad_cleanup_user;
+        }
+        int i;
+        for (i = argc - 1; i >= 0; i--)
+        {
+            size_t len = strlen(kargv[i]) + 1;
+            stacktop -= len;
+            if (!copy_to_user(mm, (void *)stacktop, kargv[i], len))
+            {
+                ret = -E_INVAL;
+                goto bad_cleanup_user;
+            }
+            uargv[i] = stacktop;
+        }
+        uargv[argc] = 0;
+        stacktop = ROUNDDOWN(stacktop, sizeof(uintptr_t));
+        stacktop -= (argc + 1) * sizeof(uintptr_t);
+        if (!copy_to_user(mm, (void *)stacktop, uargv, (argc + 1) * sizeof(uintptr_t)))
+        {
+            ret = -E_INVAL;
+            goto bad_cleanup_user;
+        }
+    }
+
     //(6) setup trapframe for user environment
     struct trapframe *tf = current->tf;
     // Keep sstatus
     uintptr_t sstatus = tf->status;
     memset(tf, 0, sizeof(struct trapframe));
-    /* LAB5:填写你在lab5中实现的代码
-     * should set tf_cs,tf_ds,tf_es,tf_ss,tf_esp,tf_eip,tf_eflags
-     * NOTICE: If we set trapframe correctly, then the user level process can return to USER MODE from kernel. So
-     *          tf_cs should be USER_CS segment (see memlayout.h)
-     *          tf_ds=tf_es=tf_ss should be USER_DS segment
-     *          tf_esp should be the top addr of user stack (USTACKTOP)
-     *          tf_eip should be the entry point of this binary program (elf->e_entry)
-     *          tf_eflags should be set to enable computer to produce Interrupt
-     */
-    tf->gpr.sp = USTACKTOP;
+    uintptr_t argv_user = stacktop;
+    stacktop = ROUNDDOWN(stacktop, 16);
+    tf->gpr.sp = stacktop;
+    tf->gpr.a0 = argc;
+    tf->gpr.a1 = argv_user;
     tf->epc = elf.e_entry;
     tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SIE);
     tf->status |= SSTATUS_SPIE;
@@ -889,7 +921,22 @@ out:
     {
         kfree(phdrs);
     }
+    if (uargv != NULL)
+    {
+        kfree(uargv);
+    }
     return ret;
+bad_cleanup_user:
+    current->mm = NULL;
+    current->pgdir = boot_pgdir_pa;
+    lsatp(boot_pgdir_pa);
+    if (mm_count_dec(mm) == 0)
+    {
+        exit_mmap(mm);
+        put_pgdir(mm);
+        mm_destroy(mm);
+    }
+    goto out;
 bad_cleanup_mmap:
     exit_mmap(mm);
 bad_elf_cleanup_pgdir:
@@ -1003,11 +1050,12 @@ int do_execve(const char *name, int argc, const char **argv)
         current->mm = NULL;
     }
     ret = -E_NO_MEM;
-    ;
     if ((ret = load_icode(fd, argc, kargv)) != 0)
     {
+        sysfile_close(fd);
         goto execve_exit;
     }
+    sysfile_close(fd);
     put_kargv(argc, kargv);
     set_proc_name(current, local_name);
     return 0;
