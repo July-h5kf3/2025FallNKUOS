@@ -276,6 +276,7 @@ void proc_run(struct proc_struct *proc)
             current = proc;
             lsatp(proc->pgdir);
             write_csr(sscratch, proc->kstack + KSTACKSIZE);
+            flush_tlb();
             switch_to(&(prev->context), &(proc->context));
         }
         local_intr_restore(intr_flag);
@@ -869,6 +870,7 @@ load_icode(int fd, int argc, char **kargv)
     current->mm = mm;
     current->pgdir = PADDR(mm->pgdir);
     lsatp(PADDR(mm->pgdir));
+    flush_tlb();
 
     /* copy argv strings to the new user stack */
     if (argc > 0)
@@ -1041,6 +1043,7 @@ int do_execve(const char *name, int argc, const char **argv)
     if (mm != NULL)
     {
         lsatp(boot_pgdir_pa);
+        flush_tlb();
         if (mm_count_dec(mm) == 0)
         {
             exit_mmap(mm);

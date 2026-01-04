@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <assert.h>
 #include <default_sched.h>
+#include <default_sched.h>
+
+extern struct sched_class stride_sched_class;
 
 // the list of timer
 static list_entry_t timer_list;
@@ -53,7 +56,8 @@ void sched_init(void)
 {
     list_init(&timer_list);
 
-    sched_class = &default_sched_class;
+    // use stride scheduler to respect lab6 priorities
+    sched_class = &stride_sched_class;
 
     rq = &__rq;
     rq->max_time_slice = MAX_TIME_SLICE;

@@ -245,10 +245,12 @@ main(int argc, char **argv) {
                 ret = 0;
             }
             if (ret != 0) {
+                if (ret == -E_KILLED) {
+                    continue; // killed by signal/kill: treat as expected, no error print
+                }
                 printf("error: %d - %e\n", ret, ret);
             }
         }
     }
     return 0;
 }
-

@@ -164,6 +164,12 @@ void exception_handler(struct trapframe *tf)
         break;
     case CAUSE_ILLEGAL_INSTRUCTION:
         cprintf("Illegal instruction\n");
+        if (trap_in_kernel(tf))
+        {
+            print_trapframe(tf);
+            panic("kernel illegal instruction.\n");
+        }
+        do_exit(-E_INVAL);
         break;
     case CAUSE_BREAKPOINT:
         cprintf("Breakpoint\n");
