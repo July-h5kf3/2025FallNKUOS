@@ -290,7 +290,7 @@ bad_fork_cleanup_mm:
 ### 3. 结果验证
 
 首先我们执行`make qemu`，结果如下，可以看到成功进入`shell`：
-![image-20260104165042875](C:\Users\冯佳荟\AppData\Roaming\Typora\typora-user-images\image-20260104165042875.png)
+![image-20260104165042875](img/1.png)
 
 然后我们可以在终端输入几个程序进行测试：
 
@@ -298,22 +298,22 @@ bad_fork_cleanup_mm:
 
   我们先输入`hello`测试是否可以输出预期字符串，结果如下，说明 `sysfile_open + load_icode_read` 能从 `sfs` 读取 `ELF` 并成功执行：
 
-  ![image-20260104165209345](C:\Users\冯佳荟\AppData\Roaming\Typora\typora-user-images\image-20260104165209345.png)
+  ![image-20260104165209345](img/2.png)
 
 - **执行 exit**
 
   接着输入`exit`，结果如下，可以看到子进程退出，`shell` 返回提示符，说明 `fork/exec/wait` 协同工作正常：
 
-  ![image-20260104165357157](C:\Users\冯佳荟\AppData\Roaming\Typora\typora-user-images\image-20260104165357157.png)
+  ![image-20260104165357157](img/3.png)
 
 - **执行不存在的程序**
 
   另外我们还可以测试当输入`user`目录下不存在的程序名时，结果如何：
 
-  ![image-20260104165512582](C:\Users\冯佳荟\AppData\Roaming\Typora\typora-user-images\image-20260104165512582.png)
+  ![image-20260104165512582](img/5.png)
 
   可以看到`exec` 打开失败后输出错误提示：`no such file`，子进程退出，`shel`l 仍可继续接受命令，说明错误路径处理正确且不会破坏父进程。
 
 以上测试结果说明我们已经成功实现了一个可以通过文件系统和用户程序交互的终端，最后我们测试`make grade`结果如下，得分为`100/100`，本次实验圆满结束！
 
-![image-20260104165908020](C:\Users\冯佳荟\AppData\Roaming\Typora\typora-user-images\image-20260104165908020.png)
+![image-20260104165908020](img/4.png)
