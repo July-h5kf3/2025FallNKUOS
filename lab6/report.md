@@ -141,7 +141,6 @@ lab6 引入 `run_queue`（`lab6/kern/schedule/sched.h`），包含：
 #### 运行结果与现象
 
 - `make grade`：通过，得分 50/50。关键输出包含 `all user-mode processes have quit.` 与 `init check memory pass.`。
-- QEMU 观察：priority 测例中 5 个子进程轮转递增计数，最终 `sched result` 近似均衡（1 1 1 1 1），符合 RR 时间片均分。
 
 #### RR 优缺点与时间片
 
