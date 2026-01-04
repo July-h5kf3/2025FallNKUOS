@@ -550,30 +550,21 @@ sfs_close(struct inode *node) {
  * @write:    BOOL, 0 read, 1 write
  */
 static int
-sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf,
-              off_t offset, size_t *alenp, bool write) {
+sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset, size_t *alenp, bool write) {
     struct sfs_disk_inode *din = sin->din;
     assert(din->type != SFS_TYPE_DIR);
-
-    off_t endpos;
-    size_t alen = 0;
-    int ret = 0;
-
-    /* -------- 参数与边界检查 -------- */
-    if (offset < 0 || offset >= SFS_MAX_FILE_SIZE) {
+    off_t endpos = offset + *alenp, blkoff;
+    *alenp = 0;
+	// calculate the Rd/Wr end position
+    if (offset < 0 || offset >= SFS_MAX_FILE_SIZE || offset > endpos) {
         return -E_INVAL;
     }
-
-    if (*alenp == 0) {
+    if (offset == endpos) {
         return 0;
     }
-
-    if (*alenp > SFS_MAX_FILE_SIZE - offset) {
+    if (endpos > SFS_MAX_FILE_SIZE) {
         endpos = SFS_MAX_FILE_SIZE;
-    } else {
-        endpos = offset + *alenp;
     }
-
     if (!write) {
         if (offset >= din->size) {
             return 0;
@@ -583,93 +574,80 @@ sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf,
         }
     }
 
-    *alenp = 0;
-
-    /* -------- 选择读 / 写操作 -------- */
-    int (*sfs_buf_op)(struct sfs_fs *, void *, size_t, uint32_t, off_t);
-    int (*sfs_block_op)(struct sfs_fs *, void *, uint32_t, uint32_t);
-
+    int (*sfs_buf_op)(struct sfs_fs *sfs, void *buf, size_t len, uint32_t blkno, off_t offset);
+    int (*sfs_block_op)(struct sfs_fs *sfs, void *buf, uint32_t blkno, uint32_t nblks);
     if (write) {
-        sfs_buf_op   = sfs_wbuf;
-        sfs_block_op = sfs_wblock;
-    } else {
-        sfs_buf_op   = sfs_rbuf;
-        sfs_block_op = sfs_rblock;
+        sfs_buf_op = sfs_wbuf, sfs_block_op = sfs_wblock;
+    }
+    else {
+        sfs_buf_op = sfs_rbuf, sfs_block_op = sfs_rblock;
     }
 
-    /* -------- 计算块范围（关键修正点） -------- */
-    uint32_t first_blk = offset / SFS_BLKSIZE;
-    uint32_t last_blk  = (endpos - 1) / SFS_BLKSIZE;
-    uint32_t blkno     = first_blk;
-    uint32_t nblks     = last_blk - first_blk;
-
-    off_t blkoff = offset % SFS_BLKSIZE;
-    char *buffer = (char *)buf;
+    int ret = 0;
+    size_t size, alen = 0;
     uint32_t ino;
-    size_t size;
+    uint32_t blkno = offset / SFS_BLKSIZE;          // The NO. of Rd/Wr begin block
+    uint32_t nblks = endpos / SFS_BLKSIZE - blkno;  // The size of Rd/Wr blocks
+    blkoff = offset % SFS_BLKSIZE;
+    char *buffer = (char *)buf;
 
-    /* -------- 1. 处理首块（非对齐） -------- */
+  //LAB8:EXERCISE1 YOUR CODE HINT: call sfs_bmap_load_nolock, sfs_rbuf, sfs_rblock,etc. read different kind of blocks in file
+	/*
+	 * (1) If offset isn't aligned with the first block, Rd/Wr some content from offset to the end of the first block
+	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_buf_op
+	 *               Rd/Wr size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset)
+	 * (2) Rd/Wr aligned blocks 
+	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_block_op
+     * (3) If end position isn't aligned with the last block, Rd/Wr some content from begin to the (endpos % SFS_BLKSIZE) of the last block
+	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_buf_op	
+	*/
+
     if (blkoff != 0) {
-        size = (blkno != last_blk) ?
-               (SFS_BLKSIZE - blkoff) :
-               (endpos - offset);
-
+        size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
         if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
             goto out;
         }
         if ((ret = sfs_buf_op(sfs, buffer, size, ino, blkoff)) != 0) {
             goto out;
         }
-
-        alen   += size;
-        buffer += size;
-        blkno++;
-        if (nblks > 0) {
-            nblks--;
+        alen += size, buffer += size;
+        if (nblks == 0) {
+            goto out;
         }
+        blkno ++, nblks --;
     }
 
-    /* -------- 2. 处理中间整块 -------- */
-    while (nblks > 0) {
+    size = SFS_BLKSIZE;
+    while (nblks != 0) {
         if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
             goto out;
         }
         if ((ret = sfs_block_op(sfs, buffer, ino, 1)) != 0) {
             goto out;
         }
-
-        alen   += SFS_BLKSIZE;
-        buffer += SFS_BLKSIZE;
-        blkno++;
-        nblks--;
+        blkno ++, nblks --;
+        alen += size, buffer += size;
     }
 
-    /* -------- 3. 处理尾块（非对齐） -------- */
-    if (blkno == last_blk) {
-        size = endpos % SFS_BLKSIZE;
-        if (size != 0) {
-            if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
-                goto out;
-            }
-            if ((ret = sfs_buf_op(sfs, buffer, size, ino, 0)) != 0) {
-                goto out;
-            }
-            alen += size;
+    size = endpos % SFS_BLKSIZE;
+    if (size != 0) {
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+            goto out;
         }
+        if ((ret = sfs_buf_op(sfs, buffer, size, ino, 0)) != 0) {
+            goto out;
+        }
+        alen += size;
     }
 
 out:
     *alenp = alen;
-
-    /* -------- 只有写才更新文件大小（关键修正点） -------- */
-    if (write && offset + alen > din->size) {
-        din->size = offset + alen;
+    if (offset + alen > sin->din->size) {
+        sin->din->size = offset + alen;
         sin->dirty = 1;
     }
-
     return ret;
 }
-
 
 /*
  * sfs_io - Rd/Wr file. the wrapper of sfs_io_nolock
